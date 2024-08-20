@@ -4,6 +4,7 @@ import pandas as pd
 
 from demeter import TokenInfo, Actuator, Strategy, RowData, ChainType, MarketInfo, MarketDict, AtTimeTrigger
 from demeter.uniswap import UniV3Pool, UniLpMarket
+from demeter.metrics import performance_metrics
 
 pd.options.display.max_columns = None
 pd.set_option("display.width", 5000)
@@ -13,10 +14,30 @@ class DemoStrategy(Strategy):
     """
     this demo shows how to access markets and assets
     """
+    _lpCnt = 0
 
     def initialize(self):
+
         new_trigger = AtTimeTrigger(time=datetime(2023, 8, 15, 12, 0, 0), do=self.work)  # init trigger object
         self.triggers.append(new_trigger)
+        new_trigger = AtTimeTrigger(time=datetime(2023, 8, 15, 0, 3, 0), do=self.add_lp)
+        self.triggers.append(new_trigger)
+
+        new_trigger = AtTimeTrigger(time=datetime(2023, 8, 15, 1, 3, 0), do=self.add_lp)
+        self.triggers.append(new_trigger)
+
+
+
+    def add_lp(self, row_data: RowData):
+        lp_market: UniLpMarket = self.markets[market_key]
+        current_price = row_data.market_status[market_key].price
+        if self._lpCnt < 2:
+            lp_market.add_liquidity(current_price-100 - self._lpCnt, current_price + 100 + self._lpCnt, quote_max_amount=5000)
+
+            print("liquidity added")
+            self._lpCnt += 1
+
+
 
     def work(self, row_data: RowData):
         # access market, all market are stored in a property, whose type is MarketDict.
@@ -68,4 +89,10 @@ if __name__ == "__main__":
     actuator.strategy = DemoStrategy()  # set strategy
     actuator.set_price(market.get_price_from_data())  # set price
 
+
     actuator.run()  # run actuator
+
+    metrics = performance_metrics(
+        actuator.account_status_df["net_value"], benchmark=actuator.account_status_df["price"]["ETH"]
+    )
+    print(metrics)

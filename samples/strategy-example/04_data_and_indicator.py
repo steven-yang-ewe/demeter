@@ -42,6 +42,7 @@ class DemoStrategy(Strategy):
         data: pd.DataFrame = self.data.market1
         # access current row
         assert data.loc[row_data.timestamp].netAmount0 == data.iloc[row_data.row_id].netAmount0
+        data.iloc[row_data.row_id]
         # access one minute before
         assert data.loc[row_data.timestamp - timedelta(minutes=1)].price == data.iloc[row_data.row_id - 1].price
         # access extra column by its name

@@ -46,6 +46,8 @@ class DemoStrategy(Strategy):
         # Register a trigger, every day, we split both assets into two shares of equal value
         self.triggers.append(PeriodTrigger(time_delta=timedelta(days=1), trigger_immediately=True, do=self.rebalance))
 
+        self.data_logs = []
+
     def rebalance(self, row_data: RowData):
         self.markets[market_key].even_rebalance(row_data.market_status[market_key].price)
 
@@ -63,6 +65,8 @@ class DemoStrategy(Strategy):
         # get moving average price, if value is nan, fill it with current price
         ma_price = self.data[market_key].loc[row_data.timestamp]["sma"]
         ma_price = row_data.market_status[market_key].price if math.isnan(ma_price) else ma_price
+
+        self.data_logs.append("sma: "+repr(ma_price) +", id: "+ str(row_data.row_id)+", record: "+row_data.prices.to_string())
 
         # this is a nonsense strategy, just to show how to trigger actions
         if row_data.market_status[market_key].price > ma_price + 25 and len(self.markets[market_key].positions) < 1:
@@ -95,6 +99,9 @@ class DemoStrategy(Strategy):
         print("\n")
         print(action.timestamp, action.action_type.value)
 
+    def print_logs(self):
+        print(*self.data_logs, sep='\n')
+
 
 if __name__ == "__main__":
     usdc = TokenInfo(name="usdc", decimal=6)  # TokenInfo(name='usdc', decimal=6)
@@ -119,3 +126,4 @@ if __name__ == "__main__":
     actuator.print_action=True
 
     actuator.run()  # run actuator
+    actuator.strategy.print_logs()

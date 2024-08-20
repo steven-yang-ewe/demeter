@@ -6,6 +6,7 @@ import demeter.indicator
 from demeter import TokenInfo, Actuator, Strategy, ChainType, PeriodTrigger, MarketInfo, RowData
 from demeter.uniswap import UniLpMarket, UniV3Pool
 from strategy_ploter import plot_position_return_decomposition
+from demeter.metrics import performance_metrics
 
 pd.options.display.max_columns = None
 pd.set_option("display.width", 5000)
@@ -69,5 +70,9 @@ if __name__ == "__main__":
     actuator.set_price(market.get_price_from_data())  # set price
 
     actuator.run()  # run test
-
+    # get metrics
+    metrics = performance_metrics(
+        actuator.account_status_df["net_value"], benchmark=actuator.account_status_df["price"]["ETH"]
+    )
+    print(metrics)
     plot_position_return_decomposition(actuator.account_status_df, actuator.token_prices[eth.name], market_key)

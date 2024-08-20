@@ -4,6 +4,7 @@ import pandas as pd
 from matplotlib.pylab import plt
 import matplotlib.dates as mdates
 
+
 from demeter import MarketInfo
 from demeter.broker import AccountStatus
 
@@ -39,4 +40,5 @@ def plot_position_return_decomposition(account_status: pd.DataFrame, price: pd.S
     price_ax.plot(time_ts, price_ts, 'y-', label="price")
     fig.legend()
     fig.show()
+    fig.savefig("position_return_decomposition.png")
     pass

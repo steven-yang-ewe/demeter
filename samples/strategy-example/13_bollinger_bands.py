@@ -48,6 +48,7 @@ class AddByVolatility(Strategy):
         self.triggers.append(PeriodTrigger(time_delta=timedelta(hours=4), trigger_immediately=True, do=self.work))
         self.markets.default.even_rebalance(self.data[market_key].iloc[0]["price"])
 
+
     def work(self, row_data: RowData):
         lp_market: UniLpMarket = self.broker.markets[market_key]
         lp_row_data = row_data.market_status[market_key]

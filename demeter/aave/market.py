@@ -356,17 +356,17 @@ class AaveV3Market(Market):
     ):
         """
         Set up pool status of this moment, such as liquidity index, supply/borrow rate, and price
-bug test case
+
         :param data: market status
         :type data: AaveMarketStatus
         :param price: current price of tokens involved
         :type price: Series
         """
+        # TODO : debug test case
         super().set_market_status(data, price)
         if data.data is None:
             data.data = self.data.loc[data.timestamp]
         self._market_status = data
-        self.quote_token = super().quote_token
         self._borrows_amount_cache.reset()
         self._supplies_amount_cache.reset()
         self._collaterals_amount_cache.reset()
@@ -1164,3 +1164,6 @@ bug test case
                 ),
             )
         )
+
+    def _resample(self, freq: str):
+        self._data = self.data.resample(freq).first()

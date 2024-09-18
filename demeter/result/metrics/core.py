@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Any
 
 from decimal import Decimal
 
@@ -10,9 +10,10 @@ DECIMAL_1 = Decimal(1)
 
 def performance_metrics(
     values: pd.Series, annualized_risk_free_rate=0.03, benchmark: pd.Series | None = None
-) -> Dict[MetricEnum, Decimal]:
+) -> Dict[MetricEnum, Any]:
     """
     Calculate all performance metrics
+
     :param values: value's you need to calculate,
     :param annualized_risk_free_rate: annualized risk_free rate
     :param benchmark: benchmark, if set to None, some metrics depends on this will not be calculated
@@ -41,6 +42,9 @@ def performance_metrics(
 
     returns = values.pct_change().dropna()
     metric_map = {
+        MetricEnum.start_period: values.index[0],
+        MetricEnum.end_period: values.index[-1],
+        MetricEnum.duration: (values.index[-1] - values.index[0]) + interval,
         MetricEnum.return_value: return_value(init, final),
         MetricEnum.return_rate: return_rate(init, final),
         MetricEnum.annualized_return: annualized_return(duration_in_day, init, final),
@@ -52,4 +56,8 @@ def performance_metrics(
         MetricEnum.benchmark_rate: benchmark_return,
         MetricEnum.annualized_benchmark_rate: benchmark_apr,
     }
-    return {k: Decimal(v) for k, v in metric_map.items()}
+    return {k: v for k, v in metric_map.items()}
+
+
+def round_results(val_dict: Dict[MetricEnum, Any], decimal: int = 3):
+    return {k: round(v, decimal) if isinstance(v, (int, float, complex, Decimal)) else v for k, v in val_dict.items()}

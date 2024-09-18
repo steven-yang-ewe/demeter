@@ -2,6 +2,9 @@ from enum import Enum
 
 
 class MetricEnum(Enum):
+    start_period = "Start period"
+    end_period = "End period"
+    duration = "Duration"
     return_value = "Return"
     return_rate = "Rate of Return"
     annualized_return = "APR"
@@ -18,3 +21,4 @@ class MetricEnum(Enum):
 
     def __repr__(self):
         return self.value
+

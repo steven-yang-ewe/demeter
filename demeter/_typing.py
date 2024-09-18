@@ -1,3 +1,7 @@
+import logging
+
+from datetime import datetime
+
 import json
 
 from dataclasses import dataclass
@@ -111,7 +115,7 @@ class TokenInfo:
         return self.name.__hash__()
 
 
-class DemeterError(Exception):
+class DemeterError(RuntimeError):
     def __init__(self, message):
         self.message = message
 
@@ -145,10 +149,17 @@ class MarketDescription:
     name: str
     """market name"""
 
+@dataclass
+class DemeterLog:
+    time: datetime
+    message: str
+    level: int = logging.INFO
+
 
 USD = TokenInfo("USD", 0)
 
 STABLE_COINS = [
+    "USD",
     "USDT",
     "USDC",
     "DAI",
@@ -168,4 +179,5 @@ STABLE_COINS = [
     "USDX",
     "LUSD",
     "GHO",
+
 ]

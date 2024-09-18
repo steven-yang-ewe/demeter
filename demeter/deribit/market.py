@@ -1,11 +1,13 @@
 import json
+import logging
 import os
 from _decimal import Decimal
 from datetime import date, timedelta
-from orjson import orjson
 from typing import List, Dict, Tuple
+import copy
 
 import pandas as pd
+from orjson import orjson
 
 from ._typing import (
     DeribitOptionDescription,
@@ -21,14 +23,24 @@ from ._typing import (
     ExpiredAction,
     DeliverAction,
     DERIBIT_OPTION_FREQ,
+    InsufficientBalanceError,
+    DepositAction,
+    WithdrawAction,
 )
 from .helper import round_decimal, position_to_df
 from .. import TokenInfo
 from .._typing import DemeterError
 from ..broker import Market, MarketInfo, write_func, BASE_FREQ
-from ..utils import float_param_formatter, get_formatted_predefined, STYLE, get_formatted_from_dict, console_text
+from ..utils import (
+    float_param_formatter,
+    get_formatted_predefined,
+    STYLE,
+    get_formatted_from_dict,
+    console_text,
+)
 
 DEFAULT_DATA_PATH = "./data"
+BASIC_INTERVAL = pd.Timedelta("1h")
 
 
 def order_converter(array_str) -> List:
@@ -65,6 +77,9 @@ class DeribitOptionMarket(Market):
         self.positions: Dict[str, OptionPosition] = {}
         self.decimal = self.token_config.min_fee_decimal
         self._balance_cache = None
+        # In reality, Deribit is an independent account, and you need to deposit funds into Deribit in order to trade.
+        self.balance = Decimal(0)
+        self.quote_token = token
 
     MAX_FEE_RATE = Decimal("0.125")
     ETH = TokenInfo("eth", 18)
@@ -89,11 +104,21 @@ class DeribitOptionMarket(Market):
 
         return orjson.dumps(self.description, default=orjson_default).decode()
 
+    @property
     def description(self):
         """
         Get a brief description of this market
         """
-        return DeribitOptionDescription(type(self).__name__, self._market_info.name, len(self.positions))
+        return DeribitOptionDescription(
+            type(self).__name__, self._market_info.name, self.token.name, list(self.positions.keys())
+        )
+
+    def load_pkl_data(self, path):
+        if not os.path.exists(path):
+            raise DemeterError(f"{path} doesn't exist")
+        self.logger.info(f"start load files in {path}")
+        self._data = pd.read_pickle(path)
+        self.logger.info("data has been prepared")
 
     def load_data(self, start_date: date, end_date: date):
         """
@@ -109,27 +134,86 @@ class DeribitOptionMarket(Market):
         self.logger.info(f"start load files from {start_date} to {end_date}...")
         day = start_date
         df = pd.DataFrame()
+        from tqdm import tqdm
 
-        while day <= end_date:
-            path = os.path.join(
-                self.data_path,
-                f"Deribit-option-book-{self.token.name}-{day.strftime('%Y%m%d')}.csv",
-            )
-            if not os.path.exists(path):
-                raise IOError(f"resource file {path} not found")
+        with tqdm(total=(end_date - start_date).days + 1, ncols=150) as pbar:
+            while day <= end_date:
+                path = os.path.join(
+                    self.data_path,
+                    f"Deribit-option-book-{self.token.name}-{day.strftime('%Y%m%d')}.csv",
+                )
+                if not os.path.exists(path):
+                    logging.warning(f"resource file {path} not found")
+                    day += timedelta(days=1)
+                    pbar.update()
+                    continue
 
-            day_df = pd.read_csv(
-                path,
-                parse_dates=["time", "expiry_time"],
-                index_col=["time", "instrument_name"],
-                converters={"asks": order_converter, "bids": order_converter},
-            )
-            day_df.drop(columns=["actual_time", "min_price", "max_price"], inplace=True)
-            df = pd.concat([df, day_df])
-            day += timedelta(days=1)
+                day_df = pd.read_csv(
+                    str(path),
+                    parse_dates=["time", "expiry_time"],
+                    index_col=["time", "instrument_name"],
+                    converters={"asks": order_converter, "bids": order_converter},
+                )
+                day_df.drop(columns=["actual_time", "min_price", "max_price"], inplace=True)
+                df = pd.concat([df, day_df])
+                day += timedelta(days=1)
+                pbar.update()
 
         self._data = df
         self.logger.info("data has been prepared")
+
+    @float_param_formatter
+    def deposit(self, amount: Decimal | float) -> Decimal:
+        """
+        Add token amount to wallet of deribit, token is quote token in this market.
+        :param amount: balance, e.g. 1.2345
+        :type amount: Decimal | float
+        :return: new balance
+        :rtype: Decimal
+        """
+        self.broker.subtract_from_balance(self.token, amount)
+        self._add_to_balance(amount)
+        self._record_action(
+            DepositAction(
+                market=self._market_info,
+                token=self.token.name,
+                amount=amount,
+            )
+        )
+
+    def _add_to_balance(self, amount: Decimal | float) -> Decimal:
+        self.balance += amount
+        return self.balance
+
+    @float_param_formatter
+    def withdraw(self, amount: Decimal | float) -> Decimal:
+        """
+        | Sub token amount to wallet of deribit, token is quote token in this market.
+
+        :param amount: Decimal or float type
+        :type amount:  Decimal | float
+        :return: new balance
+        :rtype: Decimal
+        """
+        new_balance = self._subtract_from_balance(amount)
+        # Actually, withdraw fee should be charged, but the amount is depended on network condition
+        # https://www.deribit.com/kb/fees
+        self.broker.add_to_balance(self.token, amount)
+        self._record_action(
+            WithdrawAction(
+                market=self._market_info,
+                token=self.token.name,
+                amount=amount,
+            )
+        )
+        return new_balance
+
+    def _subtract_from_balance(self, amount: Decimal | float) -> Decimal:
+        left_over = self.balance - amount
+        if left_over < Decimal(0):
+            raise InsufficientBalanceError(f"Not enough balance, balance is {self.balance}, amount to sub is {amount}")
+        self.balance = left_over
+        return left_over
 
     def check_market(self):
         """
@@ -154,7 +238,13 @@ class DeribitOptionMarket(Market):
         """
         super().set_market_status(data, price)
         if data.data is None:
-            data.data = self._data.loc[data.timestamp.floor(DERIBIT_OPTION_FREQ)]
+            tmr_idx = data.timestamp.floor(DERIBIT_OPTION_FREQ)
+            if tmr_idx in self._data.index:
+                data.data = self._data.loc[tmr_idx]
+            else:
+                data.data = pd.DataFrame(columns=self._data.columns)
+                if self._is_open():
+                    logging.warning(f"Deribit data in {data.timestamp} doesn't exist")
         self._market_status = data
 
     # region for option market only
@@ -169,7 +259,10 @@ class DeribitOptionMarket(Market):
         :type total_premium: Decimal
         """
         return round_decimal(
-            min(self.token_config.trade_fee_rate * amount, DeribitOptionMarket.MAX_FEE_RATE * total_premium),
+            min(
+                self.token_config.trade_fee_rate * amount,
+                DeribitOptionMarket.MAX_FEE_RATE * total_premium,
+            ),
             self.decimal,
         )
 
@@ -183,7 +276,10 @@ class DeribitOptionMarket(Market):
         :type total_premium: Decimal
         """
         return round_decimal(
-            min(self.token_config.delivery_fee_rate * amount, DeribitOptionMarket.MAX_FEE_RATE * total_premium),
+            min(
+                self.token_config.delivery_fee_rate * amount,
+                DeribitOptionMarket.MAX_FEE_RATE * total_premium,
+            ),
             self.decimal,
         )
 
@@ -225,8 +321,6 @@ class DeribitOptionMarket(Market):
         value += (
             get_formatted_from_dict(
                 {
-                    "put_count": console_text.format_value(balance.put_count),
-                    "call_count": console_text.format_value(balance.call_count),
                     "delta": console_text.format_value(balance.delta),
                     "gamma": console_text.format_value(balance.gamma),
                 }
@@ -239,6 +333,24 @@ class DeribitOptionMarket(Market):
 
         return value
 
+    @float_param_formatter
+    def estimate_cost(
+        self,
+        instrument_name: str,
+        amount: float | Decimal,
+        type: str = "buy",  # buy or sell
+        price_in_token: float | Decimal | None = None,
+    ):
+        amount = self.__get_trade_amount(amount)
+        row = self.data.loc[(self._market_status.timestamp, instrument_name)]
+        order_list = row.asks if type == "buy" else row.bids
+        order_list = copy.deepcopy(order_list)
+        used_order = self._deduct_order_amount(amount, order_list, price_in_token)
+
+        total_premium = Decimal(sum([Decimal(t.amount) * Decimal(t.price) for t in used_order]))
+        fee_amount = self.get_trade_fee(amount, total_premium)
+        return total_premium + fee_amount
+
     @write_func
     @float_param_formatter
     def buy(
@@ -247,7 +359,7 @@ class DeribitOptionMarket(Market):
         amount: float | Decimal,
         price_in_token: float | Decimal | None = None,
         price_in_usd: float | Decimal | None = None,
-    ) -> List[Order]:
+    ) -> Tuple[List[Order], Decimal]:
         """
         Buy option.
         if price is not none, will buy at specific price
@@ -275,7 +387,7 @@ class DeribitOptionMarket(Market):
 
         total_premium = Decimal(sum([Decimal(t.amount) * Decimal(t.price) for t in ask_list]))
         fee_amount = self.get_trade_fee(amount, total_premium)
-        self.broker.subtract_from_balance(self.token, total_premium + fee_amount)
+        self._subtract_from_balance(total_premium + fee_amount)
 
         # add position
         average_price = Order.get_average_price(ask_list)
@@ -294,7 +406,10 @@ class DeribitOptionMarket(Market):
         else:
             position = self.positions[instrument_name]
             position.avg_buy_price = Order.get_average_price(
-                [Order(average_price, amount), Order(position.avg_buy_price, position.buy_amount)]
+                [
+                    Order(average_price, amount),
+                    Order(position.avg_buy_price, position.buy_amount),
+                ]
             )
             position.buy_amount += amount
             position.amount += amount
@@ -312,7 +427,7 @@ class DeribitOptionMarket(Market):
                 orders=ask_list,
             )
         )
-        return ask_list
+        return ask_list, fee_amount
 
     @staticmethod
     def _find_available_orders(price, order_list) -> List:
@@ -327,7 +442,7 @@ class DeribitOptionMarket(Market):
         amount: float | Decimal,
         price_in_token: float | Decimal | None = None,
         price_in_usd: float | Decimal | None = None,
-    ) -> List[Order]:
+    ) -> Tuple[List[Order], Decimal]:
         """
         Sell option.
         if price is not none, will sell at specific price
@@ -351,12 +466,12 @@ class DeribitOptionMarket(Market):
         bid_list = self._deduct_order_amount(amount, bids, price_in_token)
 
         # write positions back
-        if self.data is not None:
-            self.data.loc[(self._market_status.timestamp, instrument_name), "bids"] = bids
+        # if self.data is not None:
+        #     self.data.loc[(self._market_status.timestamp, instrument_name), "bids"] = bids
 
         total_premium = Decimal(sum([Decimal(t.amount) * Decimal(t.price) for t in bid_list]))
         fee = self.get_trade_fee(amount, total_premium)
-        self.broker.add_to_balance(self.token, total_premium - fee)
+        self._add_to_balance(total_premium - fee)
 
         # subtract position
         average_price = Order.get_average_price(bid_list)
@@ -365,7 +480,10 @@ class DeribitOptionMarket(Market):
 
         position = self.positions[instrument_name]
         position.avg_sell_price = Order.get_average_price(
-            [Order(average_price, amount), Order(position.avg_sell_price, position.sell_amount)]
+            [
+                Order(average_price, amount),
+                Order(position.avg_sell_price, position.sell_amount),
+            ]
         )
         position.sell_amount += amount
         position.amount -= amount
@@ -387,9 +505,9 @@ class DeribitOptionMarket(Market):
                 orders=bid_list,
             )
         )
-        return bid_list
+        return bid_list, fee
 
-    def _deduct_order_amount(self, amount, orders, price_in_token):
+    def _deduct_order_amount(self, amount, orders, price_in_token) -> List[Order]:
         """
         subtract amount from asks/bids. e.g. if bid1 is run out, will deduct bid2. etc.
         """
@@ -406,7 +524,7 @@ class DeribitOptionMarket(Market):
                     continue
                 should_deduct = min(Decimal(str(order[1])), amount_to_deduct)
                 amount_to_deduct -= should_deduct
-                order[1] -= should_deduct
+                order[1] -= float(should_deduct)
                 order_list.append(Order(Decimal(str(order[0])), should_deduct))
                 if order[1] > 0 or amount_to_deduct == Decimal(0):
                     break
@@ -454,7 +572,8 @@ class DeribitOptionMarket(Market):
             available_amount = sum([Decimal(x[1]) for x in available_orders])
         if amount > available_amount:
             raise DemeterError(
-                f"insufficient order to buy, required amount is {amount}, available amount is {available_amount}"
+                f"insufficient order to buy {instrument_name}, required amount is {amount}, "
+                f"available amount is {available_amount}"
             )
 
         return amount, instrument, price_in_token
@@ -482,12 +601,12 @@ class DeribitOptionMarket(Market):
         :rtype: MarketBalance
         """
         if self._is_open():
-            put_count = len(list(filter(lambda x: x.type == OptionKind.put, self.positions.values())))
-            call_count = len(list(filter(lambda x: x.type == OptionKind.call, self.positions.values())))
-
             total_premium = Decimal(0)
             delta = gamma = Decimal(0)
             for position in self.positions.values():
+                # data may missing due to unstable collect server
+                if position.instrument_name not in self.market_status.data.index:
+                    continue
                 instr_status = self.market_status.data.loc[position.instrument_name]
                 instrument_premium = position.amount * round_decimal(instr_status.mark_price, self.decimal)
                 total_premium += instrument_premium
@@ -496,8 +615,8 @@ class DeribitOptionMarket(Market):
 
             delta = Decimal(0) if total_premium == Decimal(0) else delta / total_premium
             gamma = Decimal(0) if total_premium == Decimal(0) else gamma / total_premium
-
-            self._balance_cache = OptionMarketBalance(total_premium, put_count, call_count, delta, gamma)
+            equity = self.balance + total_premium
+            self._balance_cache = OptionMarketBalance(equity, self.balance, total_premium, delta, gamma)
         return self._balance_cache
 
     # region exercise
@@ -510,10 +629,13 @@ class DeribitOptionMarket(Market):
         key_to_remove = []
         for pos_key, position in self.positions.items():
             if self._market_status.timestamp >= position.expiry_time:
-                # should
-                if position.instrument_name not in self._market_status.data.index:
-                    raise DemeterError(f"{position.instrument_name} is not in current orderbook")
-                instrument: InstrumentStatus = self.market_status.data.loc[position.instrument_name]
+                # should not happen
+                if position.instrument_name in self._market_status.data.index:
+                    instrument: InstrumentStatus = self.market_status.data.loc[position.instrument_name]
+                else:
+                    logging.warning(f"{position.instrument_name} is not in current orderbook")
+                    instrument = InstrumentStatus(mark_price=0, underlying_price=self._price_status[self.token.name])
+
                 deliver_amount = deliver_fee = None
                 if position.type == OptionKind.put and position.strike_price > instrument.underlying_price:
                     deliver_amount, deliver_fee = self._deliver_option(position, instrument, False)
@@ -542,7 +664,7 @@ class DeribitOptionMarket(Market):
             if pos_key in self.market_status.data.index:
                 instrument: InstrumentStatus = self.market_status.data.loc[position.instrument_name]
             else:
-                instrument = InstrumentStatus(mark_price=0, underlying_price=0)
+                instrument = InstrumentStatus(mark_price=0, underlying_price=self._price_status[self.token.name])
             self._record_action(
                 ExpiredAction(
                     market=self._market_info,
@@ -564,7 +686,8 @@ class DeribitOptionMarket(Market):
         deliver option
         """
         fee = self.get_deliver_fee(
-            option_pos.amount, option_pos.amount * round_decimal(instrument.mark_price, self.decimal)
+            option_pos.amount,
+            option_pos.amount * round_decimal(instrument.mark_price, self.decimal),
         )
         if is_call:
             price_diff = instrument.underlying_price - option_pos.strike_price
@@ -572,13 +695,21 @@ class DeribitOptionMarket(Market):
             price_diff = option_pos.strike_price - instrument.underlying_price
 
         balance_to_add = round_decimal(
-            option_pos.amount * Decimal(price_diff / instrument.underlying_price), self.decimal
+            option_pos.amount * Decimal(price_diff / instrument.underlying_price),
+            self.decimal,
         )
         if balance_to_add <= fee:
             return None, None
-        self.broker.add_to_balance(self.token, balance_to_add - fee)
+        self._add_to_balance(balance_to_add - fee)
         return balance_to_add, fee
 
     # endregion
 
     # endregion
+
+    def _resample(self, freq: str):
+        interval_delta = pd.Timedelta(freq)
+        if interval_delta <= BASIC_INTERVAL:
+            return
+        else:
+            self._data = self._data.groupby(level=1).resample(freq, level=0).first().swaplevel(1, 0)

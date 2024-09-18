@@ -1,39 +1,39 @@
 import logging
 import os
-import pandas as pd
 import pickle
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from typing import List, Union, Tuple
+
+import pandas as pd
 from pandas import Timestamp
 from tqdm import tqdm  # process bar
-from typing import List, Union, NamedTuple, Tuple
 
 from .. import Broker, Asset, ActionTypeEnum
-from .._typing import DemeterError, UnitDecimal, DemeterWarning, TokenInfo, MarketDescription, USD
+from ..result import BackTestDescription
+from .._typing import (
+    DemeterError,
+    UnitDecimal,
+    DemeterWarning,
+    TokenInfo,
+    MarketDescription,
+    USD,
+    DemeterLog,
+)
 from ..broker import BaseAction, AccountStatus, MarketInfo, MarketDict, MarketStatus, RowData
 from ..strategy import Strategy
 from ..uniswap import PositionInfo
 from ..utils import console_text
 from ..utils import get_formatted_predefined, STYLE, to_decimal, to_multi_index_df
 
+BASIC_INTERVAL = pd.Timedelta("1min")
+
 
 @dataclass
 class RunningCount:
     get_account_status_df: int = 0
-
-
-class BackTestDescription(NamedTuple):
-    strategy_name: str
-    quote_token: TokenInfo
-    init_status: AccountStatus
-    assets: List[TokenInfo]
-    markets: List[MarketDescription]
-    actions: List[BaseAction]
-    backtest_start: datetime
-    backtest_end: datetime
-    backtest_duration: float
 
 
 class Actuator(object):
@@ -50,6 +50,7 @@ class Actuator(object):
         """
         # all the actions during the test(buy/sell/add liquidity)
         self._action_list: List[BaseAction] = []
+        self._logs: List[DemeterLog] = []
         self._currents = Currents()
         # broker status in every bar, use array for performance
         self._account_status_list: List[AccountStatus] = []
@@ -70,6 +71,8 @@ class Actuator(object):
         self.__runnning_count: RunningCount = RunningCount()
         self.print_action = False
         self.init_account_status = None
+        # set backtest with other freq to make it faster, freq should be larger than 1 minute
+        self.interval: str = "1min"
 
     def _record_action_list(self, action: BaseAction):
         """
@@ -82,6 +85,7 @@ class Actuator(object):
         action.set_type()
         self._action_list.append(action)
         self._currents.actions.append(action)
+        self._log(action.timestamp, f"{action.market}: {action.action_type.name}, {action.comment}")
 
     # region property
     @property
@@ -195,7 +199,8 @@ class Actuator(object):
         if not self.__backtest_finished:
             if self.__runnning_count.get_account_status_df >= 10:
                 raise DemeterWarning(
-                    "Frequent calls to account_status_df will generate multiple DataFrame objects, consuming a lot of time and memory. Consider using account_status instead."
+                    "Frequent calls to account_status_df will generate multiple DataFrame objects, "
+                    "consuming a lot of time and memory. Consider using account_status instead."
                 )
             self.__runnning_count.get_account_status_df += 1
 
@@ -294,6 +299,12 @@ class Actuator(object):
                 print(action.get_output_str())
 
     def _check_backtest(self):
+        if not self.interval[0].isdigit():
+            self.interval = "1" + self.interval
+        interval_delta = pd.Timedelta(self.interval)
+        if interval_delta < BASIC_INTERVAL:
+            raise DemeterError("interval should be larger than 1 minute")
+
         self.broker.check_backtest()
 
         # ensure all token has price list.
@@ -318,6 +329,9 @@ class Actuator(object):
                 raise DemeterError(
                     f"Price dataframe doesn't have {market.quote_token}, it's the quote token of {market.market_info.name}"
                 )
+
+    def _log(self, timestamp: datetime, message: str, level: int = logging.INFO):
+        self._logs.append(DemeterLog(timestamp, message, level))
 
     def __get_row_data(self, timestamp, row_id, current_price) -> RowData:
         row_data = RowData(timestamp.to_pydatetime(), row_id, current_price)
@@ -351,7 +365,12 @@ class Actuator(object):
 
         return largest_market.data.index.get_level_values(0).unique()
 
-    def run(self, print: bool = True):
+    def switch_interval(self, index_array: pd.DatetimeIndex) -> pd.DatetimeIndex:
+        for mk, market in self.broker.markets.items():
+            market._resample(self.interval)
+        return pd.Series(0, index=index_array).resample(self.interval).first().index
+
+    def run(self, print_result: bool = True):
         """
         Start back test, the whole process including:
 
@@ -369,8 +388,8 @@ class Actuator(object):
         * run strategy.finalize()
         * output result if required
 
-        :param print: If true, print backtest result to console.
-        :type print: bool
+        :param print_result: If true, print backtest result to console.
+        :type print_result: bool
         """
         self.__start_time = time.time()  # 1681718968.267463
         self.reset()
@@ -379,6 +398,9 @@ class Actuator(object):
         index_array: pd.DatetimeIndex = (
             self.get_test_range()
         )  # list(self._broker.markets.values())[0].data.index.get_level_values(0).unique()
+        if self.interval != "1min":
+            self.logger.info(f"Interval is {self.interval}, resampling data...")
+            index_array = self.switch_interval(index_array)
         self.logger.info(f"Qute token is {self.broker.quote_token}")
         self.logger.info("init strategy...")
 
@@ -406,7 +428,10 @@ class Actuator(object):
                     for trigger in self._strategy.triggers:
                         if trigger.when(row_data):
                             trigger.do(row_data)
-
+                # remove outdate triggers
+                self._strategy.triggers = [
+                    x for x in self._strategy.triggers if not x.is_out_date(self._currents.timestamp)
+                ]
                 for market in self.broker.markets.values():
                     if market.is_open and market.open is not None:
                         market.open(row_data)
@@ -414,7 +439,8 @@ class Actuator(object):
                 self._strategy.on_bar(row_data)
 
                 # important, take uniswap market for example,
-                # if liquidity has changed in the head of this minute, this will add the new liquidity to total_liquidity in current minute.
+                # if liquidity has changed in the head of this minute,
+                # this will add the new liquidity to total_liquidity in current minute.
                 self.__set_market_timestamp(timestamp_index, True)
 
                 # update broker status, e.g. re-calculate fee
@@ -448,7 +474,7 @@ class Actuator(object):
 
         self._strategy.finalize()
         self.__backtest_finished = True
-        if print:
+        if print_result:
             self.print_result()
 
         self.__backtest_duration = time.time() - self.__start_time
@@ -471,7 +497,7 @@ class Actuator(object):
         print(get_formatted_predefined("Account balance history", STYLE["header1"]))
         console_text.print_dataframe_with_precision(self._account_status_df)
 
-    def save_result(self, path: str, file_name: str = None) -> List[str]:
+    def save_result(self, path: str, file_name: str = None, decimals: int | None = None, **custom_attr) -> List[str]:
         """
         Save backtesting result
 
@@ -479,6 +505,8 @@ class Actuator(object):
         :type path: str
         :param file_name: file name, default is timestamp
         :type file_name: str
+        :param decimals: decimals in csv
+        :type decimals: int
         :return: A list of saved file path
         :rtype: List[str]
         """
@@ -491,7 +519,12 @@ class Actuator(object):
 
         # save account file
         file_name = os.path.join(path, file_name_head + ".account.csv")
-        self._account_status_df.to_csv(file_name)
+        df_2_save: pd.DataFrame = self._account_status_df
+        if decimals is not None:
+            df_2_save = df_2_save.astype(float).round(decimals)
+
+            # df_2_save = df_2_save.map(lambda x: round(x, decimals) if pd.api.types.is_numeric_dtype(type(x)) else x)
+        df_2_save.to_csv(file_name)
         file_list.append(file_name)
 
         # save backtest file
@@ -505,7 +538,10 @@ class Actuator(object):
             backtest_start=datetime.fromtimestamp(self.__start_time),
             backtest_duration=self.__backtest_duration,
             backtest_end=datetime.now(),
+            logs=self._logs,
         )
+        for k, v in custom_attr.items():
+            setattr(backtest_result, k, v)
         pkl_name = os.path.join(path, file_name_head + ".pkl")
         with open(pkl_name, "wb") as outfile1:
             pickle.dump(backtest_result, outfile1)
@@ -534,6 +570,7 @@ class Actuator(object):
         self._strategy.assets = self.broker.assets
         self._strategy.account_status_df = self.account_status_df
         self._strategy.comment_last_action = self.comment_last_action
+        self._strategy.log = self._log
         for k, v in self.broker.markets.items():
             setattr(self._strategy, k.name, v)
         for k, v in self.broker.assets.items():

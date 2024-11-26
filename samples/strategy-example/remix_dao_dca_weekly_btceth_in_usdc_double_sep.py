@@ -22,7 +22,7 @@ from demeter import (
     AtTimeTrigger,
     PeriodTrigger
 )
-from demeter.core.math_helper import max_draw_down_fast
+from demeter.result.metrics.calculator import max_draw_down
 from demeter.result import performance_metrics, return_rate
 from demeter.uniswap import UniLpMarket, UniV3Pool, V3CoreLib, base_unit_price_to_sqrt_price_x96
 from datetime import date, timedelta, datetime
@@ -1031,7 +1031,7 @@ def run_test(bull_params: RemixDAOParams, bear_params: RemixDAOParams, params: T
         metrics["total_quote_swap_fee"] = strat.total_quote_swap_fee
 
         bench_price = actuator.account_status_df["price"][price_name].apply(lambda x: float(x))
-        metrics["benchmark_max_draw_down"] = max_draw_down_fast(bench_price)
+        metrics["benchmark_max_draw_down"] = max_draw_down(bench_price)
 
         metrics["total_dca"] = strat.dca_total_added
         metrics["dca_count"] = Decimal(strat.dca_count)
@@ -1095,7 +1095,7 @@ def process_for_date(csd: datetime, dsd: date, ded: date, id: str, flip_param_da
     _tick_spacing = int(fee * 200)  # 10  # should simply be fee * 200
     _aggressive = True
     _compound = False
-    _folder_prefix = f"weekly-sep-double-10k-btc-{id}-{quote_token.name.lower()}"
+    _folder_prefix = f"weekly-tttttsep-double-10k-btc-{id}-{quote_token.name.lower()}"
     _dca_add_if_non_empty = False
     _dca_timing = DcaTiming.always
     _dca_addon_price_percent = ZERO  # Decimal(0.5)
@@ -1331,7 +1331,7 @@ if __name__ == "__main__":
         # ISAO cases
         # (datetime(2024, 7, 1, 0, 0, 0), date(2024, 7, 1), date(2024, 11, 15), "dca", []),
         #  2021/05/04~2024/09/30
-        (datetime(2021, 5, 13, 0, 0, 0), date(2021, 5, 13), date(2024, 11, 11), "dca", []),
+        #(datetime(2021, 5, 13, 0, 0, 0), date(2021, 5, 13), date(2024, 11, 11), "dca", []),
         #  2021/05/04~2021/12/31
         (datetime(2021, 5, 13, 0, 0, 0), date(2021, 5, 13), date(2021, 12, 31), "dca", []),
         #  2022/01/01~2022/12/31

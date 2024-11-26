@@ -21,7 +21,7 @@ from demeter import (
     AtTimeTrigger,
     PeriodTrigger
 )
-from demeter.core.math_helper import max_draw_down, max_draw_down_fast
+from demeter.result.metrics.calculator import max_draw_down
 from demeter.result import performance_metrics
 from demeter.uniswap import UniLpMarket, UniV3Pool
 from datetime import date, timedelta, datetime
@@ -666,7 +666,7 @@ def run_test(rm_params: RemixDAOParams, params: TestParams, gp: GlobalParams, pr
         metrics["total_quote_swap_fee"] = strat.total_quote_swap_fee
 
         bench_price = actuator.account_status_df["price"][price_name].apply(lambda x: float(x))
-        metrics["benchmark_max_draw_down"] = max_draw_down_fast(bench_price)
+        metrics["benchmark_max_draw_down"] = max_draw_down(bench_price)
 
         return metrics
     except Exception as e:

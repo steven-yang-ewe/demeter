@@ -415,57 +415,57 @@ class Actuator(object):
         row_id = 0
         data_length = len(index_array)
         self.logger.info("start main loop...")
-        with tqdm(total=data_length, ncols=150) as pbar:
-            try:
-                for timestamp_index in index_array:
-                    current_price = self._token_prices.loc[timestamp_index]
-                    # prepare data of a row
+        # with tqdm(total=data_length, ncols=150) as pbar:
+        try:
+            for timestamp_index in index_array:
+                current_price = self._token_prices.loc[timestamp_index]
+                # prepare data of a row
 
-                    self.__set_market_timestamp(timestamp_index, False)
-                    # execute strategy, and some calculate
-                    self._currents.timestamp = timestamp_index.to_pydatetime()
-                    row_data = self.__get_row_data(timestamp_index, row_id, current_price)
-                    if self._strategy.triggers:
-                        for trigger in self._strategy.triggers:
-                            if trigger.when(row_data):
-                                trigger.do(row_data)
-                    # remove outdate triggers
-                    self._strategy.triggers = [
-                        x for x in self._strategy.triggers if not x.is_out_date(self._currents.timestamp)
-                    ]
-                    for market in self.broker.markets.values():
-                        if market.is_open and market.open is not None:
-                            market.open(row_data)
+                self.__set_market_timestamp(timestamp_index, False)
+                # execute strategy, and some calculate
+                self._currents.timestamp = timestamp_index.to_pydatetime()
+                row_data = self.__get_row_data(timestamp_index, row_id, current_price)
+                if self._strategy.triggers:
+                    for trigger in self._strategy.triggers:
+                        if trigger.when(row_data):
+                            trigger.do(row_data)
+                # remove outdate triggers
+                self._strategy.triggers = [
+                    x for x in self._strategy.triggers if not x.is_out_date(self._currents.timestamp)
+                ]
+                for market in self.broker.markets.values():
+                    if market.is_open and market.open is not None:
+                        market.open(row_data)
 
-                    self._strategy.on_bar(row_data)
+                self._strategy.on_bar(row_data)
 
-                    # important, take uniswap market for example,
-                    # if liquidity has changed in the head of this minute,
-                    # this will add the new liquidity to total_liquidity in current minute.
-                    self.__set_market_timestamp(timestamp_index, True)
+                # important, take uniswap market for example,
+                # if liquidity has changed in the head of this minute,
+                # this will add the new liquidity to total_liquidity in current minute.
+                self.__set_market_timestamp(timestamp_index, True)
 
-                    # update broker status, e.g. re-calculate fee
-                    # and read the latest status from broker
-                    for market in self._broker.markets.values():
-                        market.update()
+                # update broker status, e.g. re-calculate fee
+                # and read the latest status from broker
+                for market in self._broker.markets.values():
+                    market.update()
 
-                    row_data = self.__get_row_data(timestamp_index, row_id, current_price)
-                    self._strategy.after_bar(row_data)
+                row_data = self.__get_row_data(timestamp_index, row_id, current_price)
+                self._strategy.after_bar(row_data)
 
-                    self._account_status_list.append(
-                        self._broker.get_account_status(current_price, timestamp_index.to_pydatetime())
-                    )
-                    # notify actions in current loop
-                    self.notify(self.strategy, self._currents.actions)
-                    self._currents.actions = []
-                    # move forward for process bar and index
-                    pbar.update()
-                    row_id += 1
-            except RuntimeError as e:
-                print(f"timestamp on error: " + str(row_data.timestamp))
-                self._generate_account_status_df()
-                self.save_result("./", "backtest-with-error")
-                raise e
+                self._account_status_list.append(
+                    self._broker.get_account_status(current_price, timestamp_index.to_pydatetime())
+                )
+                # notify actions in current loop
+                self.notify(self.strategy, self._currents.actions)
+                self._currents.actions = []
+                # move forward for process bar and index
+                # pbar.update()
+                row_id += 1
+        except RuntimeError as e:
+            print(f"timestamp on error: " + str(row_data.timestamp))
+            self._generate_account_status_df()
+            self.save_result("./", "backtest-with-error")
+            raise e
 
         self.logger.info("main loop finished")
         self.__backtest_finished = True

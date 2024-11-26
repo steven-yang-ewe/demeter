@@ -1,3 +1,40 @@
+# Ver 0.8.0
+* add GMX Market
+
+# Ver 0.7.7
+
+* Uniswap V3:Add get position status, this will help to calculate amounts and values of a liqudity position
+* [Breaking change] Uniswap V3: Update delta gamma calucation, add get_greeks in helper.
+* Add start liquidity index for aave position
+* Add net value for metrics
+* Add cache to backtest data
+* You can set account status file format in actuator.save_result() 
+
+# Ver 0.7.6
+
+* For uniswap v3, when price is in and out of price range in this minute, fee will be calculated more accurately  
+
+# Ver 0.7.5 
+
+* Fix bugs in aave
+
+# Ver 0.7.4
+
+* [Breaking change]Value of ChainType enum has changed to chain id. 
+* Add base_token to UniV3Pool class
+
+# Ver 0.7.3
+
+* update dependency according to issue [here](https://github.com/zelos-alpha/demeter/issues/16)
+
+# Ver 0.7.2 
+
+* Add comment to action.get_output_str()
+* When exception was raised in backtesting, demeter will save actions and account status
+* Deribit market add max_mark_price_multiple, to prevent buying options too expensive to mark price
+* Update strategy.finalize(), so you can operate account_status_df in strategy.finalize().
+* Fix issues that strategy.account_status_df is empty
+
 # Ver 0.7.1
 
 * add estimate_cost for deribit market, so you can estimate how much to deposit to deribit before trade.

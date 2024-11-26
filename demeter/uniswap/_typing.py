@@ -30,6 +30,7 @@ class PositionInfo(NamedTuple):
     def __str__(self):
         return f"""tick:{self.lower_tick},{self.upper_tick}"""
 
+
 @dataclass
 class UniDescription(MarketDescription):
     """
@@ -46,6 +47,22 @@ class UniDescription(MarketDescription):
     """base token"""
     fee_rate: Decimal
     """fee rate"""
+
+
+class PositionStatus(NamedTuple):
+    liquidity: int
+    liquidity_amount0: Decimal
+    liquidity_amount1: Decimal
+    liquidity_value :Decimal
+    pending_amount0: Decimal
+    pending_amount1: Decimal
+    pending_value:Decimal
+    amount0: Decimal
+    amount1: Decimal
+    value: Decimal
+    H: Decimal
+    L: Decimal
+    P: Decimal
 
 
 class UniV3Pool(object):
@@ -68,6 +85,7 @@ class UniV3Pool(object):
         self.token1 = token1
         self.is_token0_quote = quote_token == token0
         self.quote_token = quote_token
+        self.base_token = token1 if self.is_token0_quote else token0
         self.tick_spacing = int(fee * 200)
         self.fee: Decimal = fee * Decimal(10000)
         self.fee_rate: Decimal = Decimal(fee) / Decimal(100)
@@ -214,6 +232,7 @@ class Position(object):
     liquidity: int
     lower_price: Decimal
     upper_price: Decimal
+    init_price: Decimal
     transferred: bool = False  # this position(nft) has been transferred, so owner is not current user.
 
 
@@ -388,7 +407,7 @@ class CollectFeeAction(UniLpBaseAction):
         :return: formatted string
         :rtype: str
         """
-        get_action_str(
+        return get_action_str(
             self,
             ForColorEnum.yellow,
             {

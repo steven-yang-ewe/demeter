@@ -1,6 +1,4 @@
-import json
 import os
-import token
 from _decimal import Decimal
 from datetime import date, timedelta
 from orjson import orjson
@@ -31,9 +29,10 @@ from ._typing import (
     AaveMarketStatus,
 )
 from .core import AaveV3CoreLib
-from .. import DemeterError, TokenInfo
+from .. import DemeterError, TokenInfo, MarketTypeEnum
 from .._typing import DECIMAL_0, UnitDecimal, ChainType
 from ..broker import Market, MarketInfo, write_func
+from ..data import CacheManager
 from ..utils import get_formatted_predefined, STYLE, get_formatted_from_dict, console_text
 from ..utils.application import require, float_param_formatter, to_decimal
 
@@ -66,7 +65,7 @@ class AaveV3Market(Market):
         data_path: str = DEFAULT_DATA_PATH,
     ):
         super().__init__(market_info=market_info, data_path=data_path, data=data)
-        tokens = tokens if token is not None else []  # just to set an initial value
+        tokens = tokens if tokens is not None else []  # just to set an initial value
         self._supplies: Dict[SupplyKey, SupplyInfo] = {}
         self._borrows: Dict[BorrowKey, BorrowInfo] = {}
 
@@ -197,6 +196,15 @@ class AaveV3Market(Market):
         """
         self.logger.info(f"start load files from {start_date} to {end_date}...")
         for token_info in token_info_list:
+
+            cache_key = CacheManager.get_cache_key(
+                self.market_info.type.name, start_date, end_date, chain.name, token_info.name
+            )
+            cache_df = CacheManager.load(cache_key)
+            if cache_df is not None:
+                self.set_token_data(token_info, cache_df)
+                continue
+
             day = start_date
             df = pd.DataFrame()
             if token_info.address == "":
@@ -220,6 +228,8 @@ class AaveV3Market(Market):
 
                 df = pd.concat([df, day_df])
                 day += timedelta(days=1)
+
+            CacheManager.save(cache_key, df)
             self.set_token_data(token_info, df)
         self.logger.info("data has been prepared")
 
@@ -452,6 +462,7 @@ class AaveV3Market(Market):
             amount=supply_info.base_amount * self._market_status.data[key.token.name].liquidity_index,
             apy=AaveV3CoreLib.rate_to_apy(self._market_status.data[key.token.name].liquidity_rate),
             value=self.supplies_value[key],
+            begin_supply_index=supply_info.begin_supply_index,
         )
         return supply_value
 
@@ -476,6 +487,7 @@ class AaveV3Market(Market):
                 else self.market_status.data[borrow_key.token.name].stable_borrow_rate
             ),
             value=self.borrows_value[borrow_key],
+            begin_borrow_index=borrow_info.begin_borrow_index,
         )
 
     def add_token(self, token_info: TokenInfo | List[TokenInfo]):
@@ -608,7 +620,9 @@ class AaveV3Market(Market):
 
         key = SupplyKey(token_info)
         if key not in self._supplies:
-            self._supplies[key] = SupplyInfo(base_amount=Decimal(0), collateral=collateral)
+            self._supplies[key] = SupplyInfo(
+                base_amount=Decimal(0), collateral=collateral, begin_supply_index=token_status.liquidity_index
+            )
         else:
             require(self._supplies[key].collateral == collateral, "Collateral different from existing supply")
         self._supplies[key].base_amount += pool_amount
@@ -824,7 +838,7 @@ class AaveV3Market(Market):
         base_amount = AaveV3CoreLib.get_base_amount(amount, token_status.variable_borrow_index)
 
         if key not in self._borrows:
-            self._borrows[key] = BorrowInfo(DECIMAL_0)
+            self._borrows[key] = BorrowInfo(DECIMAL_0, token_status.variable_borrow_index)
         self._borrows[key].base_amount += base_amount
 
         self.broker.add_to_balance(token_info, amount)
@@ -937,9 +951,9 @@ class AaveV3Market(Market):
 
         payback_base_amount = AaveV3CoreLib.get_base_amount(payback_amount, token_status.variable_borrow_index)
 
-        require(payback_base_amount != 0, "invalid amount")
-        require(self._borrows[key] != 0, "no debt of selected type")
-        require(self._borrows[key].base_amount >= payback_base_amount, "amount exceed debt")
+        require(payback_base_amount > 0, "invalid amount")
+        require(self._borrows[key].base_amount > 0, "no debt of selected type")
+        require(round(self._borrows[key].base_amount - payback_base_amount, 18) >= 0, "amount exceed debt")
         if repay_with_collateral:
             payback_amount_in_collateral = self._get_swap_amount(borrow_token, repay_collateral_token, payback_amount)
             self.__sub_supply_amount(SupplyKey(repay_collateral_token), payback_amount_in_collateral)
@@ -1166,4 +1180,4 @@ class AaveV3Market(Market):
         )
 
     def _resample(self, freq: str):
-        self._data = self.data.resample(freq).first()
+        self._data = self.data.resample(freq).last()

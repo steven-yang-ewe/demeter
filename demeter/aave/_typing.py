@@ -108,6 +108,8 @@ class SupplyInfo:
     """Base amount of token. Note: base amount is the amount kept in aave contract. its value is amount/liquidity_index"""
     collateral: bool
     """set this supply to collateral or not"""
+    begin_supply_index: Decimal
+    """index value when do supply"""
 
 
 @dataclass
@@ -141,7 +143,8 @@ class Supply:
     """current apy (annual interest rate)"""
     value: Decimal
     """value at this moment. unit is usd, e.g. 1400 usd"""
-
+    begin_supply_index: Decimal
+    """index value when do supply"""
 
 def supply_to_dataframe(supplies: Dict[SupplyKey, Supply]) -> pd.DataFrame:
     """
@@ -176,6 +179,8 @@ class BorrowInfo:
 
     base_amount: Decimal
     """Base amount of token. Note: base amount is the amount kept in aave contract. its value is amount/liquidity_index"""
+    begin_borrow_index: Decimal
+    """borrow index value when borrow"""
 
 
 @dataclass
@@ -209,7 +214,8 @@ class Borrow:
     """current apy (annual interest rate)"""
     value: Decimal
     """value at this moment. unit is usd, e.g. 1400 usd"""
-
+    begin_borrow_index: Decimal
+    """borrow index value when borrow"""
 
 def borrow_to_dataframe(supplies: Dict[BorrowKey, Borrow]) -> pd.DataFrame:
     """
@@ -610,7 +616,7 @@ class LiquidationAction(BaseAction):
                 "delt_to_cover": self.delt_to_cover.to_str(),
                 "collateral_used": self.collateral_used.to_str(),
                 "liquidated": f"variable:{self.variable_delt_liquidated.to_str()} stable:{self.stable_delt_liquidated.to_str()}",
-                "health_factor": f"{self.health_factor_before.to_str()}->{self.health_factor_after.to_str()}",
+                "health_factor": f"{self.health_factor_before}->{self.health_factor_after}",
                 "collateral_after": self.collateral_after.to_str(),
                 "variable_debt_after": self.variable_debt_after.to_str(),
                 "stable_delt_after": self.stable_delt_after.to_str(),
@@ -663,6 +669,7 @@ class DictCache:
         """
         self._value[k] = v
         self.empty = False
+
 
 @dataclass
 class AaveDescription(MarketDescription):

@@ -1,33 +1,35 @@
 from decimal import Decimal
-from typing import Tuple
+from typing import Tuple, Dict, Any
 
+import numpy as np
+import pandas as pd
 from pandas import Series
 
-from demeter import RowData, MarketInfo
+from demeter import RowData, MarketInfo, Trigger
+from demeter.result import MetricEnum, annualized_return, return_rate, sharpe_ratio, volatility, max_draw_down, \
+    return_value, alpha_beta
 from demeter.uniswap import UniLpMarket, PositionInfo, Position
 
 
-class StrategyInfo:
-    was_in_range: bool = False
-    current_position_info: PositionInfo = None
-    lp_market: UniLpMarket = None
-    market_key: MarketInfo = None
-
-    def __init__(self, lp_market: UniLpMarket, market_key: MarketInfo):
-        self.lp_market = lp_market
-        self.market_key = market_key
-
-    def get_current_position(self) -> Position:
-        return self.lp_market.positions[self.current_position_info]
-
-    def get_current_position_info(self) -> PositionInfo:
-        return self.current_position_info
-
-    def set_current_position_info(self, position_info: PositionInfo):
-        self.current_position_info = position_info
-
-    def get_lp_row_data(self, row_data: RowData) -> Series:
-        return row_data.market_status[self.market_key]
+# class StrategyInfo:
+#
+#     def __init__(self, lp_market: UniLpMarket, market_key: MarketInfo):
+#         self.lp_market = lp_market
+#         self.market_key = market_key
+#         self.current_position_info: PositionInfo | None = None
+#         self.was_in_range: bool = False
+#
+#     def get_current_position(self) -> Position:
+#         return self.lp_market.positions[self.current_position_info]
+#
+#     def get_current_position_info(self) -> PositionInfo:
+#         return self.current_position_info
+#
+#     def set_current_position_info(self, position_info: PositionInfo):
+#         self.current_position_info = position_info
+#
+#     def get_lp_row_data(self, row_data: RowData) -> Series:
+#         return row_data.market_status[self.market_key]
 
 
 class RemixDAOParams:
@@ -47,31 +49,27 @@ class RemixDAOParams:
         self.init_tick_spread = init_tick_spread
 
 
-default_rm_params: RemixDAOParams = RemixDAOParams(
-    tick_spread_upper=60,
-    tick_spread_lower=60,
-    tick_upper_boundary_offset=0,
-    tick_lower_boundary_offset=0,
-    rescale_tick_upper_boundary_offset=10,
-    rescale_tick_lower_boundary_offset=10,
-    tick_spacing=10,
-    rescale_tick_tolerance=10,
-    init_tick_spread=75)
-
-
 class RemixDaoUtils:
-    # was_in_range: bool = False
-    current_position_info: PositionInfo = None
-    lp_market: UniLpMarket = None
-    market_key: MarketInfo = None
-    params: RemixDAOParams = None
 
-    def __init__(self, lp_market: UniLpMarket, market_key: MarketInfo, params: RemixDAOParams):
+    def __init__(self, lp_market: UniLpMarket, market_key: MarketInfo, bull_params: RemixDAOParams, bear_params: RemixDAOParams, start_with_bull_param: bool = True):
         self.lp_market = lp_market
         self.market_key = market_key
-        self.params = params
+        self.bull_params = bull_params
+        self.bear_params = bear_params
+        self.bull = start_with_bull_param
+        self.params = bull_params if start_with_bull_param else bear_params # default to bull
         self.printed = False
+        self.current_position_info: PositionInfo | None = None
 
+    def use_bull_params(self):
+        self.bull = True
+        self.params = self.bull_params
+
+    def use_bear_params(self):
+        self.bull = False
+        self.params = self.bear_params
+
+    
     def get_current_position(self) -> Position:
         return self.lp_market.positions[self.current_position_info]
 
@@ -147,7 +145,6 @@ class RemixDaoUtils:
         return False
 
     def calculate_one_tick_spacing_rescale_tick_boundary(self, current_tick, current_tick_lower):
-        # tick_spread_upper, tick_spread_lower, _, _, _, _, _, _ = get_rescale_info(strategy_address, controller_address)
 
         if current_tick < current_tick_lower:
             new_tick_lower = current_tick + 1
@@ -281,3 +278,82 @@ class RemixDaoUtils:
         #     f"calculate_trade, base: {base}, quote: {quote}, price: {price}, base_percent: {base_percent}, "
         #     f"quote_percent: {quote_percent}, base_to_trade: {base_to_trade}, quote_to_trade: {quote_to_trade}")
         return base_to_trade, quote_to_trade
+
+
+
+def performance_metrics_for_dca(
+    values: pd.Series, dca_total: float, annualized_risk_free_rate=0.03, benchmark: pd.Series | None = None,
+        total_fee: Decimal | None = None
+) -> Dict[str, Decimal]:
+    """
+    Calculate all performance metrics
+
+    :param values: value's you need to calculate,
+    :param dca_total: total amount dca-ed in
+    :param annualized_risk_free_rate: annualized risk_free rate
+    :param benchmark: benchmark, if set to None, some metrics depends on this will not be calculated
+    :return: a dict with metric enum and their value.
+    """
+    values = values.apply(lambda x: float(x))
+
+    init = values.iloc[0] + dca_total
+    final = values.iloc[-1]
+
+    start = values.index[0]
+    start1 = values.index[1]
+    interval = start1 - start
+    interval_in_day = interval.value / 1e9 / 86400
+    end = values.index[len(values) - 1]
+    duration_in_day = (end - start + interval).value / 1e9 / 86400
+
+    if benchmark is not None:
+        benchmark = benchmark.apply(lambda x: float(x))
+        alpha, beta = alpha_beta(values, benchmark, duration_in_day)
+        benchmark_init = benchmark.iloc[0]
+        benchmark_final = benchmark.iloc[-1]
+        benchmark_return = return_rate(benchmark_init, benchmark_final)
+        benchmark_apr = annualized_return(duration_in_day, benchmark_init, benchmark_final)
+    else:
+        alpha, beta, benchmark_return, benchmark_apr = np.nan, np.nan, np.nan, np.nan
+
+    fee_return = total_fee / Decimal(init) if total_fee is not None else None
+    returns = values.pct_change().dropna()
+    metric_map = {
+        MetricEnum.start_period.name: values.index[0],
+        MetricEnum.end_period.name: values.index[-1],
+        MetricEnum.duration.name: (values.index[-1] - values.index[0]) + interval,
+        MetricEnum.return_value.name: return_value(init, final),
+        MetricEnum.return_rate.name: return_rate(init, final),
+        MetricEnum.annualized_return.name: annualized_return(duration_in_day, init, final),
+        MetricEnum.max_draw_down.name: max_draw_down(values),
+        MetricEnum.sharpe_ratio.name: sharpe_ratio(interval_in_day, duration_in_day, values, annualized_risk_free_rate),
+        MetricEnum.volatility.name: volatility(returns, interval_in_day),
+        MetricEnum.alpha.name: alpha,
+        MetricEnum.beta.name: beta,
+        MetricEnum.benchmark_rate.name: benchmark_return,
+        MetricEnum.annualized_benchmark_rate.name: benchmark_apr,
+        "total_fee_return": fee_return,
+    }
+    return {k: v for k, v in metric_map.items()}
+
+class MonthlyTrigger(Trigger):
+
+    def __init__(self, date_of_month: int, do, **kwargs):
+        self._date_of_month: int = date_of_month
+        super().__init__(do, **kwargs)
+
+    def when(self, row_data: RowData) -> bool:
+        ts = row_data.timestamp
+        return ts.day == self._date_of_month and ts.hour == 0 and ts.minute == 0
+
+class WeeklyTrigger(Trigger):
+
+    def __init__(self, day: int, do, **kwargs):
+        """where Monday == 0 ... Sunday == 6.
+        """
+        self._day: int = day
+        super().__init__(do, **kwargs)
+
+    def when(self, row_data: RowData) -> bool:
+        ts = row_data.timestamp
+        return ts.weekday() == self._day and ts.hour == 0 and ts.minute == 0

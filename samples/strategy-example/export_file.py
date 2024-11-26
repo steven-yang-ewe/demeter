@@ -1,10 +1,12 @@
 import decimal
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import List, Tuple, Dict
 
 from demeter import BaseAction
-from demeter.metrics import MetricEnum
+from demeter.result import MetricEnum
+# from demeter.metrics import MetricEnum
 from demeter.uniswap import SellAction, CollectFeeAction, AddLiquidityAction, RemoveLiquidityAction
 import csv
 
@@ -33,6 +35,7 @@ class ExportData(object):
     base_balance: decimal.Decimal
     quote_balance: decimal.Decimal
     indicator_value: decimal.Decimal | None
+    param_type: str = "bull"
 
 
 def to_str(d: decimal.Decimal | int | None) -> str:
@@ -55,7 +58,7 @@ def export_file(file_path: str, actions: List[ExportData]):
              "base_fee", "quote_fee", "tick", "new_tick_lower", "new_tick_upper",
              "indicator_value", "tick_lower", "tick_upper",
              "price_lower", "price_upper",
-             "was_in_range", "total_base_fee", "total_quote_fee"])
+             "was_in_range", "total_base_fee", "total_quote_fee", "param_type"])
 
         for action in actions:
             csvwriter.writerow(
@@ -68,7 +71,7 @@ def export_file(file_path: str, actions: List[ExportData]):
                  to_str(action.new_tick_upper),
                  to_str(action.indicator_value), to_str(action.tick_lower), to_str(action.tick_upper),
                  to_str(action.price_lower), to_str(action.price_upper),
-                 action.was_in_range, to_str(action.total_base_fee), to_str(action.total_quote_fee)])
+                 action.was_in_range, to_str(action.total_base_fee), to_str(action.total_quote_fee), action.param_type])
 
         pass
 
@@ -114,9 +117,13 @@ def export_apr_results(file_path: str, metrics: List[Tuple[str, Dict[str, Decima
             ["Strategy", "Return", "Rate of Return", "APR", "Max Draw Down", "Sharpe Ratio", "Volatility",
              "Alpha", "Beta",
              "Total Net Value", "LP Net Value", "Total Fee", "Fee to Total Net Value",
-             "Total Base Fee Used in Swap", "Total Quote Fee Used in Swap",
+             "Total Fee Return",
+            # "Total Base Fee Used in Swap", "Total Quote Fee Used in Swap",
              "Benchmark return rate", "Benchmark APR",
-             "Spread Mean", "Spread Median", "Rebalance/Rescale Count"])
+             "Spread Mean", "Spread Median", "Rebalance/Rescale Count", "Benchmark Max Draw Down",
+             "Total DCA Amount", "DCA Count", "DCA Addon Count",
+             "Rate of Return USD", "Total Net Value USD", "LP Net Value USD", "Total Fee USD", "Total Invested USD",
+             "Invest Quote-only Return Rate"])
 
         for (strategy, m) in metrics:
             # strategy = metric[0]
@@ -126,9 +133,16 @@ def export_apr_results(file_path: str, metrics: List[Tuple[str, Dict[str, Decima
                  m[MetricEnum.annualized_return.name],
                  m[MetricEnum.max_draw_down.name], m[MetricEnum.sharpe_ratio.name], m[MetricEnum.volatility.name],
                  m[MetricEnum.alpha.name], m[MetricEnum.beta.name],
-                 m["total_net_value"], m["lp_net_value"], m["total_fee"], m["fee_to_total_net_value"],
-                 m['total_base_swap_fee'], m['total_quote_swap_fee'],
+                 to_str(m["total_net_value"]), to_str(m["lp_net_value"]), to_str(m["total_fee"]),
+                 to_str(m["fee_to_total_net_value"]),
+                 to_str(m["total_fee_return"]),
+                 #    to_str(m['total_base_swap_fee']), to_str(m['total_quote_swap_fee']),
                  m[MetricEnum.benchmark_rate.name], m[MetricEnum.annualized_benchmark_rate.name],
-                 m["spread_mean"], m["spread_median"],m["action_count"], ])
+                 m["spread_mean"], m["spread_median"], m["action_count"], m["benchmark_max_draw_down"],
+                 m["total_dca"], m["dca_count"], to_str(m.get("dca_addon_count", None)),
+                 to_str(m.get("total_return_usd", None)),
+                 to_str(m.get("total_net_value_usd", None)), to_str(m.get("lp_net_value_usd", None)),
+                 to_str(m.get("total_fee_usd", None)), to_str(m.get("total_invested_usd", None)),
+                 to_str(m.get("quote_return_usd", None))])
 
     pass

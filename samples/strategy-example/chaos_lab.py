@@ -17,7 +17,7 @@ from demeter import (
     realized_volatility,
     simple_moving_average, AtTimeTrigger, PeriodTrigger
 )
-from demeter.metrics import performance_metrics
+# from demeter.metrics import performance_metrics
 from demeter.uniswap import UniLpMarket, UniV3Pool
 from datetime import date, timedelta, datetime
 

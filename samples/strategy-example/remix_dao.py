@@ -307,7 +307,7 @@ if __name__ == "__main__":
         tick_spacing=10,
         rescale_tick_tolerance=10)
 
-    utils = RemixDaoUtils(market, market_key, rm_params)
+    utils = RemixDaoUtils(market, market_key, rm_params, rm_params)
     actuator.strategy = RemixDaoStrategy(utils, False)
     market.data_path = "../real_data"
     market.load_data(

@@ -68,6 +68,8 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
         self.last_check_price: Decimal = ZERO
         self.dca_price_history: list[tuple[Decimal, Decimal]] = []
         self.dca_addon_count: int = 0
+        self.no_more_fund: bool = False
+        self.no_more_fund_time: datetime | None = None
 
 
     def initialize(self):
@@ -92,10 +94,12 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
                             average_true_range(market_data.lowestTick, market_data.highestTick, market_data.closeTick,
                                                self.params.indicator_length_min))
 
-        if self.params.rescale_frequency == RescaleFrequency.hourly:
-            self.triggers.append(PeriodTrigger(time_delta=timedelta(hours=1), do=self.rescale_work))
-        else:
-            self.triggers.append(PeriodTrigger(time_delta=timedelta(days=1), do=self.rescale_work))
+        # if self.params.rescale_frequency == RescaleFrequency.hourly:
+        #     self.triggers.append(PeriodTrigger(time_delta=timedelta(hours=1), do=self.rescale_work))
+        # else:
+        #     self.triggers.append(PeriodTrigger(time_delta=timedelta(days=1), do=self.rescale_work))
+
+        self.triggers.append(PeriodTrigger(time_delta=timedelta(minutes=5), do=self.rescale_work))
 
         dt = datetime(self.params.data_end_date.year, self.params.data_end_date.month, self.params.data_end_date.day,
                       23, 59, 0)
@@ -587,7 +591,7 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
             # fee0, fee1 = lp_market.collect_fee(self.utils.current_position_info, collect_to_user=False)
 
             if (new_tick_lower == self.utils.current_position_info[0] and new_tick_upper ==
-                self.utils.current_position_info[1]) or new_tick_lower >= new_tick_upper:
+                    self.utils.current_position_info[1]) or new_tick_lower >= new_tick_upper:
                 # print(f"same tick, do not rescale: {new_tick_lower}, {new_tick_upper}")
                 return
 
@@ -643,10 +647,14 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
 
             if base_used == ZERO and quote_used == ZERO:
                 print(
-                    f"\nno position place: {self.utils.current_position_info}, old_position_info: {old_position_info}, "
+                    f"\nno {row_data.timestamp} position place: {self.utils.current_position_info}, old_position_info: {old_position_info}, "
                     f"current_tick: {current_tick}, new_tick_lower: {new_tick_lower}, new_tick_upper: {new_tick_upper}, "
                     f"positions: {lp_market.positions}, base: {base}, quote: {quote}, "
-                    f"rebalance_base_fee: {rebalance_base_fee}, rebalance_quote_fee: {rebalance_quote_fee}, balance_data: {self.balance_data}")
+                    f"rebalance_base_fee: {rebalance_base_fee}, rebalance_quote_fee: {rebalance_quote_fee}, "
+                    f"balance_data: {self.balance_data}, base_removed: {base_removed}, quote_removed: {quote_removed}")
+                self.no_more_fund_time = row_data.timestamp
+                self.no_more_fund = True
+
 
             ed = ExportData()
             ed.time = row_data.timestamp
@@ -911,15 +919,15 @@ def run_test(bull_params: RemixDAOParams, bear_params: RemixDAOParams, params: T
 
         # start = datetime.now()
         actuator.set_price(market.get_price_from_data())
-        actuator.run(False)  # run test
-        # dif = datetime.now() - start
-        # print(f"run: {dif.total_seconds()} seconds")
 
+        actuator.run(False)  # run test
         price_name = gp.base_token.name.upper()
         metrics: dict[str, Decimal] = performance_metrics_for_dca(
-            actuator.account_status_df["net_value"], float(strat.dca_total_added), benchmark=actuator.account_status_df["price"][price_name],
+            actuator.account_status_df["net_value"], float(strat.dca_total_added),
+            benchmark=actuator.account_status_df["price"][price_name],
             total_fee=strat.total_fee,
         )
+
         # print(metrics)
         metrics["action_count"] = Decimal(len(strat.export_actions))
 
@@ -943,6 +951,7 @@ def run_test(bull_params: RemixDAOParams, bear_params: RemixDAOParams, params: T
         metrics["total_dca"] = strat.dca_total_added
         metrics["dca_count"] = Decimal(strat.dca_count)
         metrics["dca_addon_count"] = Decimal(strat.dca_addon_count)
+        metrics["early_end_date"] = Decimal(strat.no_more_fund_time.timestamp()) if strat.no_more_fund else ZERO
 
         return metrics
     except Exception as e:
@@ -952,7 +961,7 @@ def run_test(bull_params: RemixDAOParams, bear_params: RemixDAOParams, params: T
 
 
 @dataclass
-class RescaleParam():
+class RescaleParam:
     bull_lower_spread: int
     bull_upper_spread: int
     bear_lower_spread: int
@@ -970,14 +979,14 @@ def process_for_date(csd: datetime, dsd: date, ded: date, id: str, flip_param_da
     eth = TokenInfo(name="eth", decimal=18)
     btc = TokenInfo(name="btc", decimal=8)
 
-    # base_token, quote_token, init_quote = eth, usdc, Decimal(10000)  #  USDC
+    base_token, quote_token, init_quote = eth, usdc, Decimal(100000)  #  USDC
 
-    base_token, quote_token, init_quote = eth, usdc, Decimal(10000)  # DCA USDC
+    # base_token, quote_token, init_quote = eth, usdc, Decimal(1000)  # DCA USDC
 
     # base_token, quote_token, init_quote = btc, eth, Decimal(100)  # ETH
     # base_token, quote_token, init_quote = eth, btc, Decimal(1)  # BTC
 
-    # base_token, quote_token, init_quote = btc, usdt, Decimal(10000)
+    # base_token, quote_token, init_quote = btc, usdt, Decimal(520000)
 
     # token0, token1 = btc, eth
     # contract_address, fee, chain_name = "0x4585FE77225b41b697C938B018E2Ac67Ac5a20c0", 0.05, ChainType.ethereum.name # wbtc/weth  2021-05-13
@@ -998,11 +1007,11 @@ def process_for_date(csd: datetime, dsd: date, ded: date, id: str, flip_param_da
     _tick_spacing = int(fee * 200)  # 10  # should simply be fee * 200
     _aggressive = True
     _compound = False
-    _folder_prefix = f"weekly-10p-10k-{id}-{quote_token.name.lower()}"
+    _folder_prefix = f"5m-simple-{id}-{quote_token.name.lower()}"
     _dca_add_if_non_empty = False
-    _dca_timing = DcaTiming.always
-    _dca_addon_price_percent = Decimal(0.1) # Decimal(0.5)
-    _dca_addon_amount_percent = ONE
+    _dca_timing = DcaTiming.none
+    _dca_addon_price_percent = ZERO # Decimal(0.5) # Decimal(0.5)
+    _dca_addon_amount_percent = ZERO # ONE
     _dca_addition = DcaAddition.none
 
     gp = GlobalParams(token0=token0, token1=token1, fee=fee, init_quote=init_quote,
@@ -1016,31 +1025,21 @@ def process_for_date(csd: datetime, dsd: date, ded: date, id: str, flip_param_da
                       dca_addition=_dca_addition)
 
     # [init, lower, upper], [lower/upper], [lower, upper]
-
-    _remix_spreads = [
-        RescaleParam(init_tick_spread=10, bull_lower_spread=10, bull_upper_spread=10, bear_lower_spread=10,
-                     bear_upper_spread=10, ),
-        RescaleParam(init_tick_spread=20, bull_lower_spread=20, bull_upper_spread=20, bear_lower_spread=20,
-                     bear_upper_spread=20, ),
-        RescaleParam(init_tick_spread=30, bull_lower_spread=30, bull_upper_spread=30, bear_lower_spread=30,
-                     bear_upper_spread=30, ),
-        RescaleParam(init_tick_spread=40, bull_lower_spread=40, bull_upper_spread=40,
-                     bear_lower_spread=40, bear_upper_spread=40, ),
-        RescaleParam(init_tick_spread=50, bull_lower_spread=50, bull_upper_spread=50,
-                     bear_lower_spread=50, bear_upper_spread=50, ),
-        RescaleParam(init_tick_spread=60, bull_lower_spread=60, bull_upper_spread=60,
-                     bear_lower_spread=60, bear_upper_spread=60, ),
-        RescaleParam(init_tick_spread=100, bull_lower_spread=100, bull_upper_spread=100,
-                     bear_lower_spread=100, bear_upper_spread=100, ),
-        RescaleParam(init_tick_spread=150, bull_lower_spread=150, bull_upper_spread=150,
-                     bear_lower_spread=150, bear_upper_spread=150, ),
-        RescaleParam(init_tick_spread=200, bull_lower_spread=200, bull_upper_spread=200,
-                     bear_lower_spread=200, bear_upper_spread=200, ),
-        RescaleParam(init_tick_spread=250, bull_lower_spread=250, bull_upper_spread=250,
-                     bear_lower_spread=250, bear_upper_spread=250, ),
-        RescaleParam(init_tick_spread=300, bull_lower_spread=300, bull_upper_spread=300,
-                     bear_lower_spread=300, bear_upper_spread=300, ),
-    ]
+    # l: List[int] = [
+    #     #10,
+    #                 20, 30, 40, 50, 60, 80, 120, 150, 200, 250, 300]
+    # l: List[int] = [100, 120, 150, 200, 250, 300]
+    # l: List[int] = [25,  # 4.87%
+    #                 60,  # 11.3%
+    #                 90,  # 16.47%
+    #                 100,  # 18.12%
+    #                 120,  # 21.33
+    #                 ]
+    l: List[int] = [
+        100,200]
+    #25, 50,
+    _remix_spreads = list(map(lambda i: RescaleParam(init_tick_spread=0, bull_lower_spread=i, bull_upper_spread=i,
+                                                     bear_lower_spread=i, bear_upper_spread=i, ), l))
 
     _rescale_frequencies = [RescaleFrequency.hourly]  # RescaleFrequency.hourly,
 
@@ -1115,16 +1114,16 @@ def process_for_date(csd: datetime, dsd: date, ded: date, id: str, flip_param_da
             
             start_with_bull_param: bool = True
 
-            parameters.append((bull_with_offset, bear_with_offset,
-                               TestParams(range_strategy=RangeStrategy.remix_dao, indicator_mult=1,
-                                          report_name=f"{init_quote}{quote_token.name}_{RangeStrategy.remix_dao.name}_with_offset_{bull_with_offset.init_tick_spread}_{bull_with_offset.tick_spread_lower}-{bull_with_offset.tick_spread_upper}_{bear_with_offset.tick_spread_lower}-{bear_with_offset.tick_spread_upper}_{rescale_frequency.name}-{gp.dca_add_if_non_empty}",
-                                          indicator_length_hr=1, to_swap=False,
-                                          aggressive=_aggressive, compound=_compound,
-                                          rescale_frequency=rescale_frequency,
-                                          cal_start_datetime=csd, data_start_date=dsd, data_end_date=ded, folder=folder,
-                                          initial_swap=spread.initial_swap(), flip_param_dates=flip_param_dates,
-                                          start_with_bull_param=start_with_bull_param)
-                               ))
+            # parameters.append((bull_with_offset, bear_with_offset,
+            #                    TestParams(range_strategy=RangeStrategy.remix_dao, indicator_mult=1,
+            #                               report_name=f"{init_quote}{quote_token.name}_{RangeStrategy.remix_dao.name}_with_offset_{bull_with_offset.init_tick_spread}_{bull_with_offset.tick_spread_lower}-{bull_with_offset.tick_spread_upper}_{bear_with_offset.tick_spread_lower}-{bear_with_offset.tick_spread_upper}_{rescale_frequency.name}-{gp.dca_add_if_non_empty}",
+            #                               indicator_length_hr=1, to_swap=False,
+            #                               aggressive=_aggressive, compound=_compound,
+            #                               rescale_frequency=rescale_frequency,
+            #                               cal_start_datetime=csd, data_start_date=dsd, data_end_date=ded, folder=folder,
+            #                               initial_swap=spread.initial_swap(), flip_param_dates=flip_param_dates,
+            #                               start_with_bull_param=start_with_bull_param)
+            #                    ))
             parameters.append((bull_no_offset, bear_no_offset,
                                TestParams(range_strategy=RangeStrategy.remix_dao, indicator_mult=1,
                                           report_name=f"{init_quote}{quote_token.name}_{RangeStrategy.remix_dao.name}_no_offset_{bull_no_offset.init_tick_spread}_{bull_no_offset.tick_spread_lower}-{bull_no_offset.tick_spread_upper}_{bear_no_offset.tick_spread_lower}-{bear_no_offset.tick_spread_upper}_{rescale_frequency.name}-{gp.dca_add_if_non_empty}",
@@ -1246,7 +1245,7 @@ if __name__ == "__main__":
 
         # ISAO cases
         #  2021/05/04~2024/09/30
-        (datetime(2021, 5, 13, 0, 0, 0), date(2021, 5, 13), date(2024, 11, 11), "dca", []),
+        (datetime(2021, 5, 13, 0, 0, 0), date(2021, 5, 13), date(2024, 12, 31), "dca", []),
         #  2021/05/04~2021/12/31
         (datetime(2021, 5, 13, 0, 0, 0), date(2021, 5, 13), date(2021, 12, 31), "dca", []),
         #  2022/01/01~2022/12/31
@@ -1254,7 +1253,7 @@ if __name__ == "__main__":
         #  2023/01/01~2023/12/31
         (datetime(2023, 1, 1, 0, 0, 0), date(2023, 1, 1), date(2023, 12, 31), "dca", []),
         #  2024/01/01~2024/09/30
-        (datetime(2024, 1, 1, 0, 0, 0), date(2024, 1, 1), date(2024, 11, 11), "dca", []),
+        (datetime(2024, 1, 1, 0, 0, 0), date(2024, 1, 1), date(2024, 12, 31), "dca", []),
 
         # for WBTC/USDT
         #  2021/06/24~2024/11/11

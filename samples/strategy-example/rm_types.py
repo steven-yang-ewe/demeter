@@ -5,6 +5,7 @@ from enum import Enum
 
 from demeter import TokenInfo
 
+ZERO = Decimal(0)
 
 class RangeStrategy(str, Enum):
     remix_dao = "remix-dao"
@@ -39,14 +40,28 @@ class GlobalParams:
     chain_name: str
     contract_address: str
     swap_fee: bool = False
-    init_quote_usdc: Decimal = Decimal(0)
-    dca_usdc_amount: Decimal = Decimal(0)
+    init_quote_usdc: Decimal = ZERO
+    dca_usdc_amount: Decimal = ZERO
     dca_add_if_non_empty: bool = False
     dca_add_timing: DcaTiming = DcaTiming.base_only
     dca_addon_price_percent: Decimal = Decimal(10000)  # in decimal form 0.1 is 10%
-    dca_addon_amount_percent: Decimal = Decimal(0)  # in the amount to add in percent, 1 is to add 100%, 0.4 is to add 40%
+    dca_addon_amount_percent: Decimal = ZERO  # in the amount to add in percent, 1 is to add 100%, 0.4 is to add 40%
     dca_addition: DcaAddition = DcaAddition.none
+    init_short_amount: Decimal = ZERO
+    short_stop_loss_ratio: Decimal = Decimal(1)
 
+@dataclass
+class ShortInfo:
+    short_amount: Decimal
+    short_stop_loss_hit: bool = False
+    short_stop_loss_price: Decimal | None = None
+    short_price: Decimal | None = None
+    short_stop_loss_cnt: int = 0
+    short_win_cnt: int = 0
+    prev_stop_loss: bool = False
+    consecutive_short_stop_loss_cnt: int = 0
+    short_total_gain: Decimal = ZERO
+    short_total_loss: Decimal = ZERO
 
 class TestParams:
 

@@ -2,11 +2,10 @@ from _decimal import Decimal
 from typing import Dict
 
 from demeter import DECIMAL_0, TokenInfo
-from demeter.aave._typing import SupplyKey, ActionKey, BorrowKey
 import pandas as pd
 
 
-class AaveV3CoreLib(object):
+class  AaveV3CoreLib(object):
     """
     | The core calculation library for aave v3 market
     | Note: All functions are static
@@ -73,8 +72,8 @@ class AaveV3CoreLib(object):
 
     @staticmethod
     def get_max_borrow_value(
-        collaterals: Dict[SupplyKey, Decimal],
-        borrows: Dict[BorrowKey, Decimal],
+        collaterals: Dict[TokenInfo, Decimal],
+        borrows: Dict[TokenInfo, Decimal],
         risk_parameters: pd.DataFrame,
     ) -> Decimal:
         """
@@ -90,17 +89,17 @@ class AaveV3CoreLib(object):
         :return: borrow amount (in usd)
         :rtype: Decimal
         """
-        ltv = AaveV3CoreLib.current_ltv(collaterals, risk_parameters)
+        max_ltv = AaveV3CoreLib.max_ltv(collaterals, risk_parameters)
         total_borrow = Decimal(sum(borrows.values()))
         total_collateral = Decimal(sum(collaterals.values()))
 
-        return (total_collateral * ltv - total_borrow) * Decimal("0.99")  # because dapp web ui will multiply 0.99
+        return (total_collateral * max_ltv - total_borrow) * Decimal("0.99")  # because dapp web ui will multiply 0.99
 
     @staticmethod
     def get_min_withdraw_kept_amount(
         token: TokenInfo,
-        collaterals: Dict[SupplyKey, Decimal],
-        borrows: Dict[BorrowKey, Decimal],
+        collaterals: Dict[TokenInfo, Decimal],
+        borrows: Dict[TokenInfo, Decimal],
         risk_parameters: pd.DataFrame,
         price: Decimal,
     ) -> Decimal:
@@ -117,25 +116,25 @@ class AaveV3CoreLib(object):
         :type risk_parameters: DataFrame
         :param price: current token price
         :type price: Decimal
-        :return: min token amount should kept to prevent liquidation
+        :return: min token amount should be kept to prevent liquidation
         :rtype: Decimal
         """
         # if token is not collateral token, doesn't need to keep any
-        if token not in [k.token for k in collaterals.keys()]:
+        if token not in collaterals.keys():
             return DECIMAL_0
         supplies_liq_threshold = Decimal(0)
         for s, v in collaterals.items():
-            if s.token != token:
-                supplies_liq_threshold += risk_parameters.loc[s.token.name].liqThereshold * v
+            if s != token:
+                supplies_liq_threshold += risk_parameters.loc[s.name].reserveLiquidationThreshold * v
 
         amount = (AaveV3CoreLib.HEALTH_FACTOR_LIQUIDATION_THRESHOLD * Decimal(sum(borrows.values())) - supplies_liq_threshold) / risk_parameters.loc[
             token.name
-        ].liqThereshold
+        ].reserveLiquidationThreshold
 
         return amount / price
 
     @staticmethod
-    def health_factor(collaterals: Dict[SupplyKey, Decimal], borrows: Dict[BorrowKey, Decimal], risk_parameters) -> Decimal:
+    def health_factor(collaterals: Dict[TokenInfo, Decimal], borrows: Dict[TokenInfo, Decimal], risk_parameters) -> Decimal:
         """
         Get current health factor in decimal, e.g.0.8
 
@@ -148,13 +147,13 @@ class AaveV3CoreLib(object):
         :return: health factor
         :rtype: Decimal
         """
-        # (all supplies * liqThereshold) / all borrows
-        a = Decimal(sum([s * risk_parameters.loc[key.token.name].liqThereshold for key, s in collaterals.items()]))
+        # (all supplies * reserveLiquidationThreshold) / all borrows
+        a = Decimal(sum([s * risk_parameters.loc[key.name].reserveLiquidationThreshold for key, s in collaterals.items()]))
         b = Decimal(sum(borrows.values()))
         return AaveV3CoreLib.safe_div(a, b)
 
     @staticmethod
-    def current_ltv(collaterals: Dict[SupplyKey, Decimal], risk_parameters) -> Decimal:
+    def max_ltv(collaterals: Dict[TokenInfo, Decimal], risk_parameters) -> Decimal:
         """
         Get max ltv of this user, calculated by token ltv and positions
 
@@ -167,13 +166,13 @@ class AaveV3CoreLib(object):
         """
         all_supplies = DECIMAL_0
         for t, s in collaterals.items():
-            all_supplies += s * risk_parameters.loc[t.token.name].LTV
+            all_supplies += s * risk_parameters.loc[t.name].baseLTVasCollateral
 
         amount = sum(collaterals.values())
         return AaveV3CoreLib.safe_div(all_supplies, Decimal(amount))
 
     @staticmethod
-    def total_liquidation_threshold(collaterals: Dict[SupplyKey, Decimal], risk_parameters):
+    def total_liquidation_threshold(collaterals: Dict[TokenInfo, Decimal], risk_parameters):
         """
         | Get total liquidation threshold of this user, value is in decimal, e.g.0.81, this value should be larger than ltv
         | value = (token_amount0 * LT0 + token_amount1 * LT1 + ...) / (token_amount0 + token_amount1)
@@ -189,7 +188,7 @@ class AaveV3CoreLib(object):
         rate = DECIMAL_0
         for t, s in collaterals.items():
             sum_amount += s
-            rate += s * risk_parameters.loc[t.token.name].liqThereshold
+            rate += s * risk_parameters.loc[t.name].reserveLiquidationThreshold
 
         return AaveV3CoreLib.safe_div(rate, sum_amount)
 
@@ -215,7 +214,7 @@ class AaveV3CoreLib(object):
         return a / b if b != 0 else Decimal(0)
 
     @staticmethod
-    def get_apy(amounts: Dict[ActionKey, Decimal], rate_dict: Dict[TokenInfo, Decimal]) -> Decimal:
+    def get_apy(amounts: Dict[TokenInfo, Decimal], rate_dict: Dict[TokenInfo, Decimal]) -> Decimal:
         """
         Calculate apy of all borrows or supplies
 
@@ -228,6 +227,6 @@ class AaveV3CoreLib(object):
         """
         if len(amounts) == 0:
             return DECIMAL_0
-        a = Decimal(sum([amounts[key] * AaveV3CoreLib.rate_to_apy(rate_dict[key.token]) for key, amount in amounts.items()]))
+        a = Decimal(sum([amounts[key] * AaveV3CoreLib.rate_to_apy(rate_dict[key]) for key, amount in amounts.items()]))
         b = Decimal(sum(amounts.values()))
         return AaveV3CoreLib.safe_div_zero(a, b)  # if total amount is 0, apy should be 0

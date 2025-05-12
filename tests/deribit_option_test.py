@@ -15,7 +15,7 @@ from demeter.deribit import (
 )
 from io import StringIO
 
-from demeter.deribit.market import order_converter
+from demeter.deribit.helper import order_converter
 
 dp_market = MarketInfo("TestMarket", MarketTypeEnum.deribit_option)
 
@@ -59,7 +59,8 @@ ETH-22SEP23-1700-C,2023-09-01 06:00:00,2023-09-01 06:00:38.755,open,CALL,1700,21
         return broker
 
     def test_load_data(self):
-        market = DeribitOptionMarket(dp_market, DeribitOptionMarket.ETH, data_path="data")
+        market = DeribitOptionMarket(dp_market, DeribitOptionMarket.ETH)
+        market.data_path = "data"
         market.load_data(date(2024, 2, 15), date(2024, 2, 16))
         self.assertEqual(market.data.shape[0], 33812)
         self.assertEqual(market.data.shape[1], 24)
@@ -107,12 +108,12 @@ ETH-22SEP23-1700-C,2023-09-01 06:00:00,2023-09-01 06:00:38.755,open,CALL,1700,21
     def test_buy_amount(self):
         broker = self.get_broker()
         market: DeribitOptionMarket = broker.markets.default
-        amount, instrument, price_in_token = market._check_transaction(
+        amount, instrument, price_in_token = market.check_transaction(
             "ETH-22SEP23-1600-C", Decimal("1.2"), Decimal("0.05005"), None, True
         )
         self.assertEqual(price_in_token, Decimal("0.05"))
         self.assertEqual(amount, Decimal("1"))
-        amount, instrument, price_in_token = market._check_transaction(
+        amount, instrument, price_in_token = market.check_transaction(
             "ETH-22SEP23-1600-C", Decimal("1.8"), Decimal("0.05005"), None, True
         )
         self.assertEqual(amount, Decimal("2"))
@@ -177,6 +178,7 @@ ETH-22SEP23-1700-C,2023-09-01 06:00:00,2023-09-01 06:00:38.755,open,CALL,1700,21
         # [[0.0285, 5], [0.029, 605], [0.0295, 197], [0.03, 40], [0.0305, 18]]
         op = market.positions["ETH-22SEP23-1650-C"]
 
+        self.assertEqual(market.market_status.data.loc["ETH-22SEP23-1650-C"]["asks"][1][1], 5)
         self.assertEqual(market.balance, Decimal("3.276"))
         self.assertEqual(op.amount, Decimal(605))
         self.assertEqual(op.avg_buy_price, Decimal("0.028995867768595041322314049586776860"))

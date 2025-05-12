@@ -6,8 +6,9 @@ from decimal import Decimal
 from enum import Enum
 from typing import Generic, NamedTuple, List, Dict, TypeVar, Union
 
-from .._typing import DemeterError, TokenInfo
+from .._typing import DemeterError, TokenInfo, UnitDecimal
 from ..utils import to_multi_index_df
+from ..utils.console_text import get_action_str, ForColorEnum
 
 T = TypeVar("T")
 
@@ -22,22 +23,14 @@ class Rule(NamedTuple):
     fillna_value: int | None
 
 
-# @dataclass
-# class RowData:
-#     """
-#     Row properties
-#     """
-#
-#     timestamp: datetime = None
-#     row_id: int = None
-
-
 class MarketTypeEnum(Enum):
+    broker = 0
     uniswap_v3 = 1
     aave_v3 = 2
     deribit_option = 3
     squeeth = 4
-    gmx = 5
+    gmx_v1 = 5
+    gmx_v2 = 6
 
 
 class MarketInfo(NamedTuple):
@@ -157,6 +150,7 @@ class ActionTypeEnum(Enum):
     * collect_fee
     """
 
+    general_swap = "swap"
     uni_lp_add_liquidity = "add_liquidity"
     uni_lp_remove_liquidity = "remove_liquidity"
     uni_lp_buy = "buy"
@@ -183,6 +177,8 @@ class ActionTypeEnum(Enum):
     squeeth_liquidation = "liquidation"
     gmx_buy_glp = "buy_glp"
     gmx_sell_glp = "sell_glp"
+    gmx2_deposit = "deposit"
+    gmx2_withdraw = "withdraw"
 
     def __str__(self):
         return self.name
@@ -223,6 +219,31 @@ class BaseAction(object):
 
     def __repr__(self):
         return f"{self.timestamp.strftime('%Y-%m-%d %H:%M:%S')} {self.market.name}\t{self.action_type.name}"
+
+
+@dataclass
+class BrokerSwapAction(BaseAction):
+    from_token: TokenInfo
+    from_amount: UnitDecimal
+    to_token: TokenInfo
+    to_amount: UnitDecimal
+    fee_rate: Decimal
+    fee: UnitDecimal
+
+    def set_type(self):
+        self.action_type = ActionTypeEnum.general_swap
+
+    def get_output_str(self):
+        return get_action_str(
+            self,
+            ForColorEnum.cyan,
+            {
+                "token": f"{self.from_token.name}->{self.to_token.name}",
+                "from_amount": self.from_amount.to_str(),
+                "to_amount": self.to_amount.to_str(),
+                "fee": self.fee.to_str(),
+            },
+        )
 
 
 @dataclass
@@ -426,6 +447,7 @@ class AccountStatus(AccountStatusCommon):
     """
 
     asset_balances: AssetDict[Decimal] = field(default_factory=AssetDict)
+    asset_value: Decimal = Decimal(0)
     market_status: MarketDict[MarketBalance] = field(default_factory=MarketDict)
 
     def to_array(self) -> List:
@@ -527,7 +549,7 @@ class PositionManager:
 
 
 @dataclass
-class RowData:
+class Snapshot:
     timestamp: datetime  # Time of this iteration
     row_id: int  # index of this iteration, start from 0
     prices: pd.Series  # price of tokens at this time

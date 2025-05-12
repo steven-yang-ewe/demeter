@@ -1,10 +1,9 @@
-import json
+import copy
 import logging
 import os
 from _decimal import Decimal
-from datetime import date, timedelta
+from datetime import date
 from typing import List, Dict, Tuple
-import copy
 
 import pandas as pd
 from orjson import orjson
@@ -27,11 +26,10 @@ from ._typing import (
     DepositAction,
     WithdrawAction,
 )
-from .helper import round_decimal, position_to_df
+from .helper import round_decimal, position_to_df, get_new_order_list, load_deribit_option_data, get_price_from_data
 from .. import TokenInfo
 from .._typing import DemeterError
-from ..broker import Market, MarketInfo, write_func, BASE_FREQ
-from ..data import CacheManager
+from ..broker import Market, MarketInfo, write_func
 from ..utils import (
     float_param_formatter,
     get_formatted_predefined,
@@ -44,10 +42,6 @@ DEFAULT_DATA_PATH = "./data"
 BASIC_INTERVAL = pd.Timedelta("1h")
 
 
-def order_converter(array_str) -> List:
-    return json.loads(array_str)
-
-
 class DeribitOptionMarket(Market):
     """
     The Deribit options market can be utilized for options investment or backtesting of Greek hedging strategies.
@@ -58,10 +52,6 @@ class DeribitOptionMarket(Market):
     :type market_info: MarketInfo,
     :param token: token for this market, if you want to trade another token, you can initial another market,
     :type token: TokenInfo,
-    :param data: hourly orderbook data of deribit option market for this token
-    :type data: pd.DataFrame = None,
-    :param data_path: str = path to load data,
-    :type data_path: str = DEFAULT_DATA_PATH,
 
     """
 
@@ -69,10 +59,10 @@ class DeribitOptionMarket(Market):
         self,
         market_info: MarketInfo,
         token: TokenInfo,
-        data: pd.DataFrame = None,
-        data_path: str = DEFAULT_DATA_PATH,
+        data: pd.DataFrame | None = None,
+        data_path: str = "./data",
     ):
-        super().__init__(market_info=market_info, data_path=data_path, data=data)
+        super().__init__(market_info=market_info, data=data, data_path=data_path)
         self.token: TokenInfo = token
         self.token_config: DeribitTokenConfig = DeribitOptionMarket.TOKEN_CONFIGS[token]
         self.positions: Dict[str, OptionPosition] = {}
@@ -121,56 +111,6 @@ class DeribitOptionMarket(Market):
         self._data = pd.read_pickle(path)
         self.logger.info("data has been prepared")
 
-    def load_data(self, start_date: date, end_date: date):
-        """
-        Load data from folder set in data_path. Those data file should be downloaded by demeter, and meet name rule.
-        Deribit-option-book-{token}-{day.strftime('%Y%m%d')}.csv
-        data can be downloaded from dropbox: https://www.dropbox.com/scl/fo/kwk5kgiseu5rvccjscd0f/ANswtRLzpCxOc6cMTH0oRlE?rlkey=ai071f9695uz287lt8k0bci5e&dl=0
-
-        :param start_date: start day
-        :type start_date: date
-        :param end_date: end day, the end day will be included
-        :type end_date: date
-        """
-
-        cache_key = CacheManager.get_cache_key(self.market_info.type.name, start_date, end_date)
-        cache_df = CacheManager.load(cache_key)
-        if cache_df is not None:
-            self.data = cache_df
-            return
-
-        self.logger.info(f"start load files from {start_date} to {end_date}...")
-        day = start_date
-        df = pd.DataFrame()
-        from tqdm import tqdm
-
-        with tqdm(total=(end_date - start_date).days + 1, ncols=150) as pbar:
-            while day <= end_date:
-                path = os.path.join(
-                    self.data_path,
-                    f"Deribit-option-book-{self.token.name}-{day.strftime('%Y%m%d')}.csv",
-                )
-                if not os.path.exists(path):
-                    logging.warning(f"resource file {path} not found")
-                    day += timedelta(days=1)
-                    pbar.update()
-                    continue
-
-                day_df = pd.read_csv(
-                    str(path),
-                    parse_dates=["time", "expiry_time"],
-                    index_col=["time", "instrument_name"],
-                    converters={"asks": order_converter, "bids": order_converter},
-                )
-                day_df.drop(columns=["actual_time", "min_price", "max_price"], inplace=True)
-                df = pd.concat([df, day_df])
-                day += timedelta(days=1)
-                pbar.update()
-
-        self._data = df
-        CacheManager.save(cache_key, df)
-        self.logger.info("data has been prepared")
-
     @float_param_formatter
     def deposit(self, amount: Decimal | float) -> Decimal:
         """
@@ -189,6 +129,7 @@ class DeribitOptionMarket(Market):
                 amount=amount,
             )
         )
+        return self.balance
 
     def _add_to_balance(self, amount: Decimal | float) -> Decimal:
         self.balance += amount
@@ -231,6 +172,14 @@ class DeribitOptionMarket(Market):
         if not isinstance(self.data, pd.DataFrame):
             raise DemeterError("data must be type of data frame")
 
+    @property
+    def market_status(self) -> DeribitMarketStatus:
+        """
+        Get market status, such as current total liquidity, current apy, etc.
+        In short, it's a row of market.data.
+        """
+        return self._market_status
+
     def set_market_status(
         self,
         data: DeribitMarketStatus,
@@ -249,7 +198,8 @@ class DeribitOptionMarket(Market):
         if data.data is None:
             tmr_idx = data.timestamp.floor(DERIBIT_OPTION_FREQ)
             if tmr_idx in self._data.index:
-                data.data = self._data.loc[tmr_idx]
+                # isolate data in every process
+                data.data = self._data.loc[tmr_idx].copy()
             else:
                 data.data = pd.DataFrame(columns=self._data.columns)
                 if self._is_open():
@@ -292,22 +242,6 @@ class DeribitOptionMarket(Market):
             self.decimal,
         )
 
-    def get_price_from_data(self) -> pd.Series:
-        """
-        Get hourly underlying price.
-        """
-        if self._data is None:
-            raise DemeterError("data is empty")
-        price = []
-        for hour, hour_df in self._data.groupby(level=0):
-            price.append({"time": hour, self.token.name: hour_df.iloc[0]["underlying_price"]})
-        price_df = pd.DataFrame(price)
-        price_df.set_index(["time"], inplace=True)
-        # expend to the end of the day
-        price_df.loc[price_df.tail(1).index[0].ceil("1d")] = 0
-        price_df = price_df.resample(BASE_FREQ).ffill()
-        return price_df.drop(price_df.index[-1])
-
     def __get_trade_amount(self, amount: Decimal):
         """
         Round trade amount, and ensure amount is above dust amount
@@ -347,12 +281,21 @@ class DeribitOptionMarket(Market):
         self,
         instrument_name: str,
         amount: float | Decimal,
-        type: str = "buy",  # buy or sell
+        trade_type: str = "buy",  # buy or sell
         price_in_token: float | Decimal | None = None,
-    ):
+    ) -> Decimal:
+        """
+        Estimate trading cost.
+
+        :param instrument_name: option name
+        :param amount: amount to trade
+        :param trade_type: buy or sell
+        :param price_in_token: trading price, if set to none, will use price in orderbook
+        :return: cost amount + fee amount
+        """
         amount = self.__get_trade_amount(amount)
         row = self.data.loc[(self._market_status.timestamp, instrument_name)]
-        order_list = row.asks if type == "buy" else row.bids
+        order_list = row.asks if trade_type == "buy" else row.bids
         order_list = copy.deepcopy(order_list)
         used_order = self._deduct_order_amount(amount, order_list, price_in_token)
 
@@ -387,20 +330,37 @@ class DeribitOptionMarket(Market):
 
 
         """
-        amount, instrument, price_in_token = self._check_transaction(
+        amount, instrument, price_in_token = self.check_transaction(
             instrument_name, amount, price_in_token, price_in_usd, True, max_mark_price_multiple
         )
 
-        # this actually pass reference of the array, so asks array will be updated in _deduct_order_amount.
-        # so when orders are deducted, asks order number will be changed.
         if max_mark_price_multiple is not None:
             asks = list(
                 filter(lambda x: x[0] < max_mark_price_multiple * Decimal(instrument.mark_price), instrument.asks)
             )
         else:
             asks = instrument.asks
+        asks = copy.deepcopy(asks)
+
         # deduct bids amount
+        """
+        note:
+        Asks is updated as it's a deepcopy, 
+        but instrument.asks/market_status.loc[instrument]["asks"]/self._data.loc[time].loc[instrument]["asks"] is not updated
+        In fact, as I tested, if I use pyarraw as back_end,
+        the last three asks is different instance. that's because when you call .loc, it will return a new instance who has different id
+        So I cannot modify items in asks in market_status.loc[instrument]["asks"]
+        And when I use numpy as back_end, those three object will be the same instance. and items in the asks instance is read only therefore can not be updated.
+        
+        so I have to write entire list back
+        
+        Why I care? If amounts can be writen back, overdue buying through buying twice can be stopped. 
+        e.g. if orderbook has 100, and you buy 90. if order list not writen back, you can buy 90 next time.
+        but if order list is writen back, you can only buy 10 in the second buying.
+        this only works in this loop(which means only affect self.mark_status.data. not self._data
+        """
         ask_list = self._deduct_order_amount(amount, asks, price_in_token)
+        self.market_status.data.at[instrument_name, "asks"] = get_new_order_list(instrument.asks, ask_list)
 
         total_premium = Decimal(sum([Decimal(t.amount) * Decimal(t.price) for t in ask_list]))
         fee_amount = self.get_trade_fee(amount, total_premium)
@@ -474,26 +434,27 @@ class DeribitOptionMarket(Market):
         :type price_in_token: float | Decimal | None = None,
         :param price_in_usd: price, based in usd,
         :type price_in_usd: float | Decimal | None = None,
-        :param max_mark_price_multiple: times to mark_price, if order price is greater than mark_price * max_allowed, will not buy at this price
+        :param max_mark_price_multiple: times to mark_price, if order price is greater than mark_price * max_allowed, will not sell at this price
 
         """
-        amount, instrument, price_in_token = self._check_transaction(
+        amount, instrument, price_in_token = self.check_transaction(
             instrument_name, amount, price_in_token, price_in_usd, False, max_mark_price_multiple
         )
 
         # deduct  amount
         if max_mark_price_multiple is not None:
             bids = list(
-                filter(lambda x: x[0] > max_mark_price_multiple / Decimal(instrument.mark_price), instrument.bids)
+                filter(lambda x: x[0] > Decimal(instrument.mark_price) / max_mark_price_multiple, instrument.bids)
             )
         else:
-            bids = instrument.bids
+            bids = list(instrument.bids)
+
+        bids = copy.deepcopy(bids)
 
         bid_list = self._deduct_order_amount(amount, bids, price_in_token)
 
         # write positions back
-        # if self.data is not None:
-        #     self.data.loc[(self._market_status.timestamp, instrument_name), "bids"] = bids
+        self.market_status.data.at[instrument_name, "bids"] = get_new_order_list(instrument.bids, bid_list)
 
         total_premium = Decimal(sum([Decimal(t.amount) * Decimal(t.price) for t in bid_list]))
         fee = self.get_trade_fee(amount, total_premium)
@@ -556,7 +517,7 @@ class DeribitOptionMarket(Market):
                     break
         return order_list
 
-    def _check_transaction(
+    def check_transaction(
         self, instrument_name, amount, price_in_token, price_in_usd, is_buy, max_mark_price_multiple=None
     ) -> Tuple[Decimal, InstrumentStatus, Decimal]:
         """
@@ -589,7 +550,7 @@ class DeribitOptionMarket(Market):
                 available_orders = instrument.asks
         else:
             if max_mark_price_multiple is not None:
-                min_price = max_mark_price_multiple / Decimal(instrument.mark_price)
+                min_price = Decimal(instrument.mark_price) / max_mark_price_multiple
                 available_orders = list(filter(lambda x: x[0] > min_price, instrument.bids))
             else:
                 available_orders = instrument.bids
@@ -608,7 +569,7 @@ class DeribitOptionMarket(Market):
             available_amount = sum([Decimal(x[1]) for x in available_orders])
         if amount > available_amount:
             raise DemeterError(
-                f"insufficient order to buy {instrument_name}, required amount is {amount}, "
+                f"insufficient order to buy/sell {instrument_name}, required amount is {amount}, "
                 f"available amount is {available_amount}"
             )
 
@@ -624,7 +585,7 @@ class DeribitOptionMarket(Market):
     def _is_open(self):
         """
         ensure this market is writable. e.g. deribit option market only has data at the hour,
-        but uniswap data is minutely. so at the rest 59 minutes, deribit option market is readonly.
+        but uni-swap data is minutely. so at the rest 59 minutes, deribit option market is readonly.
         which means, you can read status, but you can not buy or sell options.
         """
         return self._market_status.timestamp == self._market_status.timestamp.floor(DERIBIT_OPTION_FREQ)
@@ -649,8 +610,8 @@ class DeribitOptionMarket(Market):
                 delta += instrument_premium * round_decimal(instr_status.delta, self.decimal)
                 gamma += instrument_premium * round_decimal(instr_status.gamma, self.decimal)
 
-            delta = Decimal(0) if total_premium == Decimal(0) else delta / total_premium
-            gamma = Decimal(0) if total_premium == Decimal(0) else gamma / total_premium
+            # delta = Decimal(0) if total_premium == Decimal(0) else delta / total_premium
+            # gamma = Decimal(0) if total_premium == Decimal(0) else gamma / total_premium
             equity = self.balance + total_premium
             self._balance_cache = OptionMarketBalance(equity, self.balance, total_premium, delta, gamma)
         return self._balance_cache
@@ -749,3 +710,9 @@ class DeribitOptionMarket(Market):
             return
         else:
             self._data = self._data.groupby(level=1).resample(freq, level=0).first().swaplevel(1, 0)
+
+    def load_data(self, start_date: date, end_date: date):
+        self._data = load_deribit_option_data(start_date, end_date, self.data_path)
+
+    def get_price_from_data(self) -> pd.Series:
+        return get_price_from_data(self.data)

@@ -1,4 +1,51 @@
+# Ver 1.1.0
+
+* Add gmx v2 market
+* Add swap in broker, in case there is no swapble market in backtest
+* Show net value in process bar during backtest
+* AAVE market:
+  * [Breaking change] Improve aave market, you can download risk parameter with demeter-fetch
+  * Remove stable rate borrowing in aave v3
+  * [Breaking change] remove supply and borrow key, just use token instead, because there are only one interest rate.
+  * add ltv and max_ltv in market balance
+
+# Ver 1.0.2
+
+Improve performance in deribit market. You should clear cache in your first running to make it work.
+
+# Ver 1.0.1
+
+[Breaking change] Remove callback in BacktestManager, because if subprocess return actuator, 
+it will cause object copy between subprocess and main process, which will cost a lot of time. 
+You can do saving or calculating performance in Strategy.finialize().
+
+# Ver 1.0.0
+
+* Add `BacktestManager` who can start multiple backtest in one or multiple subprocesses.
+* [Breaking change] RowData class in strategy was renamed to Snapshot
+* Gmx market:
+    * [Breaking change]market type was change to `gmx_v1`
+
+# Ver 0.8.3
+
+* fix errors in deribit market.
+* _check_transaction function in deribit market was set to public
+* [Breaking change] Delta and gamma in deribit option market was changed from average value to total value
+* Add cash value in AccountStatus of broker
+
+# Ver 0.8.2
+
+* change order when saving backtest result
+* data and price has updated. The value in the beginning of the minute will follow the value in the last minute(In old version it will be decided by
+  the first transaction in this minute.)
+* fix issues in data cache(when feather file is lost, a error will be raised)
+* show market name when loading data
+* add lp net value for uniswap market balance
+* deribit: convert type of t when loading csv
+* fix other bugs
+
 # Ver 0.8.0
+
 * add GMX Market
 
 # Ver 0.7.7
@@ -8,26 +55,26 @@
 * Add start liquidity index for aave position
 * Add net value for metrics
 * Add cache to backtest data
-* You can set account status file format in actuator.save_result() 
+* You can set account status file format in actuator.save_result()
 
 # Ver 0.7.6
 
-* For uniswap v3, when price is in and out of price range in this minute, fee will be calculated more accurately  
+* For uniswap v3, when price is in and out of price range in this minute, fee will be calculated more accurately
 
-# Ver 0.7.5 
+# Ver 0.7.5
 
 * Fix bugs in aave
 
 # Ver 0.7.4
 
-* [Breaking change]Value of ChainType enum has changed to chain id. 
+* [Breaking change]Value of ChainType enum has changed to chain id.
 * Add base_token to UniV3Pool class
 
 # Ver 0.7.3
 
 * update dependency according to issue [here](https://github.com/zelos-alpha/demeter/issues/16)
 
-# Ver 0.7.2 
+# Ver 0.7.2
 
 * Add comment to action.get_output_str()
 * When exception was raised in backtesting, demeter will save actions and account status

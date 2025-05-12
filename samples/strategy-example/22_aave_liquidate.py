@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime
 from io import StringIO
 
-from demeter import TokenInfo, Actuator, Strategy, RowData, MarketInfo, MarketTypeEnum, AtTimeTrigger, BaseAction
+from demeter import TokenInfo, Actuator, Strategy, Snapshot, MarketInfo, MarketTypeEnum, AtTimeTrigger, BaseAction
 from demeter.aave import AaveV3Market, LiquidationAction
 
 # To print all the columns of dataframe, we should set up display option.
@@ -56,9 +56,9 @@ class LiquidiateStrategy(Strategy):
         supply_trigger = AtTimeTrigger(time=datetime(2023, 8, 15, 0, 0), do=self.supply_and_borrow)
         self.triggers.extend([supply_trigger])
 
-    def supply_and_borrow(self, row_data: RowData):
-        supply_key = aave_market.supply(weth, 10, True)
-        borrow_key = aave_market.borrow(usdc, 7500)
+    def supply_and_borrow(self, snapshot: Snapshot):
+        aave_market.supply(weth, 10, True)
+        aave_market.borrow(usdc, 7500)
 
     def notify(self, action: BaseAction):
         if isinstance(action, LiquidationAction):
@@ -70,7 +70,11 @@ if __name__ == "__main__":
     usdc = TokenInfo(name="usdc", decimal=6)
 
     market_key = MarketInfo("aave", MarketTypeEnum.aave_v3)
-    aave_market = AaveV3Market(market_info=market_key, risk_parameters_path="../../tests/aave_risk_parameters/polygon.csv", tokens=[weth, usdc])
+    aave_market = AaveV3Market(
+        market_info=market_key,
+        risk_parameters_path="../../tests/aave_risk_parameters/demo.csv",
+        tokens=[weth, usdc],
+    )
 
     aave_market.set_token_data(weth, pd.read_csv(StringIO(eth_data_csv), index_col=0, parse_dates=True))
     aave_market.set_token_data(usdc, pd.read_csv(StringIO(usdc_data_csv), index_col=0, parse_dates=True))

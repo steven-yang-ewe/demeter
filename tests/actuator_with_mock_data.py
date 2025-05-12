@@ -3,8 +3,9 @@ from decimal import Decimal
 
 import pandas as pd
 
-import utils
-from demeter import TokenInfo, Actuator, Strategy, MarketDict, RowData, MarketInfo
+
+from tests.utils import get_uni_v3_mock_data
+from demeter import TokenInfo, Actuator, Strategy, Snapshot, MarketInfo
 from demeter.uniswap import UniLpBalance, UniV3Pool, V3CoreLib, UniLpMarket
 from demeter.uniswap.liquitidy_math import get_sqrt_ratio_at_tick
 
@@ -19,10 +20,10 @@ tick_width = 500
 
 
 class AddOnFirstTickStrategy(Strategy):
-    def on_bar(self, row_data: RowData):
+    def on_bar(self, snapshot: Snapshot):
         market: UniLpMarket = self.broker.markets[test_market]
-        if row_data.row_id == 0:
-            tick = market.price_to_tick(row_data.market_status[test_market].price)
+        if snapshot.row_id == 0:
+            tick = market.price_to_tick(snapshot.market_status[test_market].price)
             price_high = market.tick_to_price(tick - tick_width)
             price_low = market.tick_to_price(tick + tick_width)
             market.add_liquidity(price_low, price_high)
@@ -58,7 +59,7 @@ class TestActuator(unittest.TestCase):
             center_tick + tick_width,
             get_sqrt_ratio_at_tick(center_tick),
         )
-        market.data = utils.get_uni_v3_mock_data(
+        market.data = get_uni_v3_mock_data(
             market,
             center_tick,
             usdc_amount * 10**usdc.decimal,

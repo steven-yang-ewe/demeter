@@ -2,8 +2,8 @@ from datetime import date, datetime
 
 import pandas as pd
 
-from demeter import TokenInfo, Actuator, Strategy, RowData, ChainType, MarketInfo, AtTimeTrigger
-from demeter.uniswap import UniV3Pool, UniLpMarket
+from demeter import TokenInfo, Actuator, Strategy, Snapshot, ChainType, MarketInfo, AtTimeTrigger
+from demeter.uniswap import UniV3Pool, UniLpMarket, load_uni_v3_data, get_price_from_data
 
 # To print all the columns of dataframe, we should set up display option.
 pd.options.display.max_columns = None
@@ -26,7 +26,7 @@ class MyFirstStrategy(Strategy):
         )  # This is a callback function, defines what to do at this time.
         self.triggers.append(new_trigger)  # Register our trigger
 
-    def work(self, row_data: RowData):
+    def work(self, snapshot: Snapshot):
         """
         When time is up, work function will be called.
         """
@@ -56,12 +56,8 @@ if __name__ == "__main__":
     market = UniLpMarket(market_key, pool)  # uni_market:UniLpMarket, positions: 0, total liquidity: 0
     # load data for market. those data is prepared by download tool
     market.data_path = "../data"  # set data path
-    market.load_data(
-        chain=ChainType.polygon.name,  # load data
-        contract_addr="0x45dda9cb7c25131df268515131f647d726f50608",
-        start_date=date(2023, 8, 15),
-        end_date=date(2023, 8, 15),
-    )
+    market.load_data(ChainType.polygon.name, "0x45dda9cb7c25131df268515131f647d726f50608", date(2023, 8, 15), date(2023, 8, 15))
+
 
     # Declare the Actuator, which controls the whole process
     actuator = Actuator()  # declare actuator, Demeter Actuator (broker:assets: ; markets: )
@@ -75,6 +71,6 @@ if __name__ == "__main__":
     # Set price. Those price will be used in all markets.
     # Usually, you will have to find the price list from outer source.
     # Luckily, uniswap pool data contains price information. So UniLpMarket provides a function to retrieve price list.
-    actuator.set_price(market.get_price_from_data())
+    actuator.set_price(market.get_price_from_data())  # set actuator price
     # run test, If you use default parameter, final fund status will be printed in console.
     actuator.run()

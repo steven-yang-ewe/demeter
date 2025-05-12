@@ -1,9 +1,9 @@
-import pandas as pd
 from _decimal import Decimal
 from dataclasses import dataclass
-from enum import Enum
-from typing import Dict, NamedTuple, Union
+from typing import Dict, Union
 from typing import TypeVar
+
+import pandas as pd
 
 from .. import TokenInfo, UnitDecimal
 from .._typing import MarketDescription
@@ -13,83 +13,6 @@ from ..utils.console_text import get_action_str, ForColorEnum
 
 T = TypeVar("T")
 K = TypeVar("K")
-
-
-class InterestRateMode(Enum):
-    """
-    Interest rate mode
-    """
-
-    variable = 1
-    stable = 2
-
-    def __str__(self):
-        return self.name
-
-    def __repr__(self):
-        return self.name
-
-
-@dataclass
-class ActionKey:
-    """
-    Abstract key for actions(supply, borrow, etc.)
-
-    :param token: token of this position
-    :type token: TokenInfo
-    """
-
-    token: TokenInfo
-    """token of this position"""
-
-    def __str__(self):
-        return self.token.name
-
-    def __hash__(self):
-        return self.token.__hash__()
-
-
-@dataclass
-class BorrowKey(ActionKey):
-    """
-    key of dict for borrow actions
-
-    :param token: token of this position
-    :type token: TokenInfo
-    :param interest_rate_mode: interest rate mode
-    :type interest_rate_mode: InterestRateMode
-    """
-
-    interest_rate_mode: InterestRateMode
-    """interest rate mode"""
-
-    def __str__(self):
-        return f"Borrow_{self.token.name}({self.interest_rate_mode.name})"
-
-    def __repr__(self):
-        return f"Borrow_{self.token.name}({self.interest_rate_mode.name})"
-
-    def __hash__(self):
-        return hash((self.token, self.interest_rate_mode))
-
-
-@dataclass
-class SupplyKey(ActionKey):
-    """
-    key of dict for supply actions
-
-    :param token: token of this position
-    :type token: TokenInfo
-    """
-
-    def __str__(self):
-        return "Supply_" + self.token.name
-
-    def __repr__(self):
-        return "Supply_" + self.token.name
-
-    def __hash__(self):
-        return self.token.__hash__()
 
 
 @dataclass
@@ -146,7 +69,8 @@ class Supply:
     begin_supply_index: Decimal
     """index value when do supply"""
 
-def supply_to_dataframe(supplies: Dict[SupplyKey, Supply]) -> pd.DataFrame:
+
+def supply_to_dataframe(supplies: Dict[TokenInfo, Supply]) -> pd.DataFrame:
     """
     convert supply dict to a dataframe
     """
@@ -192,8 +116,6 @@ class Borrow:
     :type token: TokenInfo
     :param base_amount: Base amount of token. Note: base amount is the amount kept in aave contract. its value is amount/variable_borrow_index_at_supply_moment
     :type base_amount: Decimal
-    :param interest_rate_mode: Interest rate mode
-    :type interest_rate_mode: InterestRateMode
     :param amount: Actual amount at this moment. value is amount * variable_borrow_index_at_this_moment, unit in token amount, e.g. 1 eth
     :type amount: Decimal
     :param apy:  current apy (annual interest rate)
@@ -206,8 +128,6 @@ class Borrow:
     """which token is borrowed"""
     base_amount: Decimal
     """Base amount of token. Note: base amount is the amount kept in aave contract. its value is amount/variable_borrow_index_at_supply_moment"""
-    interest_rate_mode: InterestRateMode
-    """Interest rate mode"""
     amount: Decimal
     """Actual amount at this moment. value is amount * variable_borrow_index_at_this_moment, unit in token amount, e.g. 1 eth"""
     apy: Decimal
@@ -217,7 +137,8 @@ class Borrow:
     begin_borrow_index: Decimal
     """borrow index value when borrow"""
 
-def borrow_to_dataframe(supplies: Dict[BorrowKey, Borrow]) -> pd.DataFrame:
+
+def borrow_to_dataframe(supplies: Dict[TokenInfo, Borrow]) -> pd.DataFrame:
     """
     convert borrow dict to a dataframe
 
@@ -225,7 +146,6 @@ def borrow_to_dataframe(supplies: Dict[BorrowKey, Borrow]) -> pd.DataFrame:
     pos_dict = {
         "token": [],
         "base_amount": [],
-        "mode": [],
         "amount": [],
         "apy": [],
         "value": [],
@@ -233,7 +153,6 @@ def borrow_to_dataframe(supplies: Dict[BorrowKey, Borrow]) -> pd.DataFrame:
     for k, v in supplies.items():
         pos_dict["token"].append(v.token.name)
         pos_dict["base_amount"].append(console_text.format_value(v.base_amount))
-        pos_dict["mode"].append(v.interest_rate_mode.name)
         pos_dict["amount"].append(console_text.format_value(v.amount))
         pos_dict["apy"].append(console_text.format_value(v.apy))
         pos_dict["value"].append(console_text.format_value(v.value))
@@ -257,8 +176,8 @@ class AaveBalance(MarketBalance):
     :type collaterals_value: Decimal
     :param health_factor: current health factor
     :type health_factor: Decimal
-    :param current_ltv: max ltv allowed, in decimal, e.g. 0.7568
-    :type current_ltv: Decimal
+    :param max_ltv: max ltv allowed, in decimal, e.g. 0.7568
+    :type max_ltv: Decimal
     :param liquidation_threshold: current liquidation threshold, in decimal, e.g.0.8
     :type liquidation_threshold: Decimal
     :param supply_apy: annual interest rate of supplies
@@ -281,8 +200,10 @@ class AaveBalance(MarketBalance):
     """total collateral value in supplies(in usd)"""
     health_factor: Decimal
     """current health factor"""
-    current_ltv: Decimal
+    max_ltv: Decimal
     """max ltv allowed, in decimal, e.g. 0.7568"""
+    ltv: Decimal
+    """current ltv, in decimal, e.g. 0.7568"""
     liquidation_threshold: Decimal
     """current liquidation threshold, in decimal, e.g.0.8"""
     supply_apy: Decimal
@@ -344,21 +265,20 @@ class RiskParameter:
     """
 
     symbol: str
-    canCollateral: bool
-    LTV: float
-    liqThereshold: float
-    liqBonus: float
-    reserveFactor: float
-    canBorrow: bool
-    optimalUtilization: float
-    canBorrowStable: bool
-    debtCeiling: float
-    supplyCap: float
-    borrowCap: float
-    eModeLtv: float
-    eModeLiquidationThereshold: float
-    eModeLiquidationBonus: float
-    borrowableInIsolation: float
+    usageAsCollateralEnabled: bool
+    baseLTVasCollateral: Decimal
+    reserveLiquidationThreshold: Decimal
+    reserveLiquidationBonus: Decimal
+    reserveFactor: Decimal
+    borrowingEnabled: Decimal
+    optimalUsageRatio: Decimal
+    variableRateSlope1: Decimal
+    variableRateSlope2: Decimal
+    baseVariableBorrowRate: Decimal
+    supplyCap: Decimal
+    borrowCap: Decimal
+    borrowableInIsolation: Decimal
+    flashLoanEnabled: bool
 
 
 @dataclass
@@ -457,8 +377,6 @@ class BorrowAction(BaseAction):
 
     :param token: which token is borrowed
     :type token: str
-    :param interest_rate_mode: interest rate mode
-    :type interest_rate_mode: InterestRateMode
     :param amount: amount borrowed
     :type amount: UnitDecimal
     :param debt_after: total borrow amount of this token after borrow transaction
@@ -467,8 +385,6 @@ class BorrowAction(BaseAction):
 
     token: str
     """which token is borrowed"""
-    interest_rate_mode: InterestRateMode
-    """interest rate mode"""
     amount: UnitDecimal
     """amount borrowed"""
     debt_after: UnitDecimal
@@ -490,7 +406,6 @@ class BorrowAction(BaseAction):
             ForColorEnum.green,
             {
                 "token": self.token,
-                "interest_rate_mode": self.interest_rate_mode.name,
                 "amount": self.amount.to_str(),
                 "debt_after": self.debt_after.to_str(),
             },
@@ -504,8 +419,6 @@ class RepayAction(BaseAction):
 
     :param token: which token is borrowed
     :type token: str
-    :param interest_rate_mode: interest rate mode
-    :type interest_rate_mode: InterestRateMode
     :param amount: amount repaid
     :type amount: UnitDecimal
     :param debt_after: total borrow amount of this token after repay transaction
@@ -514,8 +427,6 @@ class RepayAction(BaseAction):
 
     token: str
     """which token is borrowed"""
-    interest_rate_mode: InterestRateMode
-    """interest rate mode"""
     amount: UnitDecimal
     """amount repaid"""
     debt_after: UnitDecimal
@@ -537,7 +448,6 @@ class RepayAction(BaseAction):
             ForColorEnum.red,
             {
                 "token": self.token,
-                "interest_rate_mode": self.interest_rate_mode.name,
                 "amount": self.amount.to_str(),
                 "debt_after": self.debt_after.to_str(),
             },
@@ -559,8 +469,6 @@ class LiquidationAction(BaseAction):
     :type collateral_used: UnitDecimal
     :param variable_delt_liquidated: liquidated debt token amount in variable delt
     :type variable_delt_liquidated: UnitDecimal
-    :param stable_delt_liquidated: liquidated debt token amount in stable delt
-    :type stable_delt_liquidated: UnitDecimal
     :param health_factor_before: health factor before liquidation
     :type health_factor_before: UnitDecimal
     :param health_factor_after: health factor after liquidation
@@ -569,8 +477,7 @@ class LiquidationAction(BaseAction):
     :type collateral_after: UnitDecimal
     :param variable_debt_after: variable debt token amount after liquidation
     :type variable_debt_after: UnitDecimal
-    :param stable_delt_after: stable delt token amount after liquidation
-    :type stable_delt_after: UnitDecimal
+
     """
 
     collateral_token: str
@@ -583,8 +490,6 @@ class LiquidationAction(BaseAction):
     """Collateral amount to subtract in liquidation"""
     variable_delt_liquidated: UnitDecimal
     """liquidated debt token amount in variable delt"""
-    stable_delt_liquidated: UnitDecimal
-    """liquidated debt token amount in stable delt"""
     health_factor_before: Decimal
     """health factor before liquidation"""
     health_factor_after: Decimal
@@ -593,8 +498,6 @@ class LiquidationAction(BaseAction):
     """collateral token amount after liquidation"""
     variable_debt_after: UnitDecimal
     """variable debt token amount after liquidation"""
-    stable_delt_after: UnitDecimal
-    """stable delt token amount after liquidation"""
 
     def set_type(self):
         self.action_type = ActionTypeEnum.aave_repay
@@ -615,11 +518,10 @@ class LiquidationAction(BaseAction):
                 "debt_token": self.debt_token,
                 "delt_to_cover": self.delt_to_cover.to_str(),
                 "collateral_used": self.collateral_used.to_str(),
-                "liquidated": f"variable:{self.variable_delt_liquidated.to_str()} stable:{self.stable_delt_liquidated.to_str()}",
+                "liquidated": f"{self.variable_delt_liquidated.to_str()}",
                 "health_factor": f"{self.health_factor_before}->{self.health_factor_after}",
                 "collateral_after": self.collateral_after.to_str(),
                 "variable_debt_after": self.variable_debt_after.to_str(),
-                "stable_delt_after": self.stable_delt_after.to_str(),
             },
         )
 

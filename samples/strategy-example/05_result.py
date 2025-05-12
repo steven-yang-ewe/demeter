@@ -6,7 +6,7 @@ from demeter import (
     TokenInfo,
     Actuator,
     Strategy,
-    RowData,
+    Snapshot,
     ChainType,
     MarketInfo,
     AtTimeTrigger,
@@ -23,7 +23,7 @@ pd.set_option("display.width", 5000)
 
 class DemoStrategy(Strategy):
     """
-    this demo shows how to access markets and assets
+    this demo shows how to handle backtest results.
     """
 
     def __init__(self):
@@ -36,15 +36,15 @@ class DemoStrategy(Strategy):
         remove_trigger = AtTimeTrigger(time=datetime(2023, 8, 16, 12, 0, 0), do=self.remove_liquidity)
         self.triggers.append(remove_trigger)
 
-    def on_bar(self, row_data: RowData):
-        self.some_record.append({"custom1": row_data.market_status[market_key]["open"]})
+    def on_bar(self, snapshot: Snapshot):
+        self.some_record.append({"custom1": snapshot.market_status[market_key]["netAmount1"]})
 
-    def work(self, row_data: RowData):
+    def work(self, snapshot: Snapshot):
         lp_market: UniLpMarket = self.markets[market_key]  # pick our market.
         self.new_position, amount0_used, amount1_used, liquidity = lp_market.add_liquidity(1000, 4000)  # add liquidity
         self.comment_last_action("Add liquidity because ...")  # add comment to last transaction
 
-    def remove_liquidity(self, row_data: RowData):
+    def remove_liquidity(self, snapshot: Snapshot):
         lp_market: UniLpMarket = self.markets[market_key]
         lp_market.remove_liquidity(self.new_position)
 
@@ -94,8 +94,8 @@ class DemoStrategy(Strategy):
 
 
 if __name__ == "__main__":
-    usdc = TokenInfo(name="usdc", decimal=6)  # TokenInfo(name='usdc', decimal=6)
-    eth = TokenInfo(name="eth", decimal=18)  # TokenInfo(name='eth', decimal=18)
+    usdc = TokenInfo(name="usdc", decimal=6)
+    eth = TokenInfo(name="eth", decimal=18)
     pool = UniV3Pool(usdc, eth, 0.05, usdc)
 
     market_key = MarketInfo("market1")  # market1
@@ -118,13 +118,13 @@ if __name__ == "__main__":
     metrics = performance_metrics(
         actuator.account_status_df["net_value"], benchmark=actuator.account_status_df["price"]["ETH"]
     )
-    print(metrics)
-
+    metrics_df = pd.DataFrame(data=metrics.items(), columns=["item", "value"])
+    print(metrics_df)
     # save backtest result(include backtest information(.pkl) and account status(.csv) to this folder)
     # default file name has timestamp. If you want a custom file name, you can set file_name
     # if you want to add some custom parameter to pkl file, you can use dict, such as custom_param in this example.
     files = actuator.save_result(path="./result", file_name="custom-file-name", custom_param="custom_value", decimals=3)
 
     # load equity list
-    account_df_loaded = load_account_status(files[0])
+    account_df_loaded = load_account_status(files[1])
     pass

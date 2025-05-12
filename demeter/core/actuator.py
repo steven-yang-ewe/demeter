@@ -20,12 +20,13 @@ from .._typing import (
     USD,
     DemeterLog,
 )
-from ..broker import BaseAction, AccountStatus, MarketInfo, MarketDict, MarketStatus, RowData
+from ..broker import BaseAction, AccountStatus, MarketInfo, MarketDict, MarketStatus, Snapshot
 from ..result import BackTestDescription
 from ..strategy import Strategy
 from ..uniswap import PositionInfo
-from ..utils import console_text
-from ..utils import get_formatted_predefined, STYLE, to_decimal, to_multi_index_df
+from ..utils import get_formatted_predefined, STYLE, to_decimal, to_multi_index_df, console_text, config_log
+
+config_log()
 
 BASIC_INTERVAL = pd.Timedelta("1min")
 
@@ -60,9 +61,7 @@ class Actuator(object):
         # strategy
         self._strategy: Strategy = Strategy()
         self._token_prices: pd.DataFrame | None = None
-        # logging
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger("Actuator")
         # internal var
         self.__start_time = None
         self.__backtest_duration = None
@@ -333,16 +332,16 @@ class Actuator(object):
     def _log(self, timestamp: datetime, message: str, level: int = logging.INFO):
         self._logs.append(DemeterLog(timestamp, message, level))
 
-    def __get_row_data(self, timestamp, row_id, current_price) -> RowData:
-        row_data = RowData(timestamp.to_pydatetime(), row_id, current_price)
+    def __get_snapshot(self, timestamp, row_id, current_price) -> Snapshot:
+        snapshot = Snapshot(timestamp.to_pydatetime(), row_id, current_price)
         for market_info, market in self.broker.markets.items():
-            row_data.market_status[market_info] = market.market_status.data
-        row_data.market_status.set_default_key(self.broker.markets.get_default_key())
-        return row_data
+            snapshot.market_status[market_info] = market.market_status.data
+        snapshot.market_status.set_default_key(self.broker.markets.get_default_key())
+        return snapshot
 
-    def __set_market_timestamp(self, timestamp: Timestamp, update: bool = False):
+    def __set_market_snapshot(self, timestamp: Timestamp, update: bool = False):
         """
-        set markets row data
+        set markets snapshot
         :param timestamp:
         :param update: enable or disable has_update flag in markets, if set to false, will always update, if set to true, just update when necessary
         :return:
@@ -368,6 +367,7 @@ class Actuator(object):
     def switch_interval(self, index_array: pd.DatetimeIndex) -> pd.DatetimeIndex:
         for mk, market in self.broker.markets.items():
             market._resample(self.interval)
+        self._token_prices = self.token_prices.resample(self.interval).first()
         return pd.Series(0, index=index_array).resample(self.interval).first().index
 
     def run(self, print_result: bool = True):
@@ -405,7 +405,7 @@ class Actuator(object):
         self.logger.info("init strategy...")
 
         # set initial status for strategy, so user can run some calculation in initial function.
-        self.__set_market_timestamp(index_array[0], False)
+        self.__set_market_snapshot(index_array[0], False)
         self._currents.timestamp = index_array[0].to_pydatetime()
         # keep initial balance for evaluating
         self.init_account_status = self._broker.get_account_status(
@@ -415,57 +415,62 @@ class Actuator(object):
         row_id = 0
         data_length = len(index_array)
         self.logger.info("start main loop...")
-        # with tqdm(total=data_length, ncols=150) as pbar:
-        try:
-            for timestamp_index in index_array:
-                current_price = self._token_prices.loc[timestamp_index]
-                # prepare data of a row
+        with tqdm(total=data_length, ncols=150) as pbar:
+            try:
+                for timestamp_index in index_array:
+                    current_price = self._token_prices.loc[timestamp_index]
+                    # prepare data of a row
 
-                self.__set_market_timestamp(timestamp_index, False)
-                # execute strategy, and some calculate
-                self._currents.timestamp = timestamp_index.to_pydatetime()
-                row_data = self.__get_row_data(timestamp_index, row_id, current_price)
-                if self._strategy.triggers:
-                    for trigger in self._strategy.triggers:
-                        if trigger.when(row_data):
-                            trigger.do(row_data)
-                # remove outdate triggers
-                self._strategy.triggers = [
-                    x for x in self._strategy.triggers if not x.is_out_date(self._currents.timestamp)
-                ]
-                for market in self.broker.markets.values():
-                    if market.is_open and market.open is not None:
-                        market.open(row_data)
+                    self.__set_market_snapshot(timestamp_index, False)
+                    # execute strategy, and some calculate
+                    self._currents.timestamp = timestamp_index.to_pydatetime()
+                    snapshot = self.__get_snapshot(timestamp_index, row_id, current_price)
 
-                self._strategy.on_bar(row_data)
+                    self._strategy.before_bar(snapshot)
 
-                # important, take uniswap market for example,
-                # if liquidity has changed in the head of this minute,
-                # this will add the new liquidity to total_liquidity in current minute.
-                self.__set_market_timestamp(timestamp_index, True)
+                    if self._strategy.triggers:
+                        for trigger in self._strategy.triggers:
+                            if trigger.when(snapshot):
+                                trigger.do(snapshot)
+                    # remove outdate triggers
+                    self._strategy.triggers = [
+                        x for x in self._strategy.triggers if not x.is_out_date(self._currents.timestamp)
+                    ]
+                    for market in self.broker.markets.values():
+                        if market.is_open and market.open is not None:
+                            market.open(snapshot)
 
-                # update broker status, e.g. re-calculate fee
-                # and read the latest status from broker
-                for market in self._broker.markets.values():
-                    market.update()
+                    self._strategy.on_bar(snapshot)
 
-                row_data = self.__get_row_data(timestamp_index, row_id, current_price)
-                self._strategy.after_bar(row_data)
+                    # important, take uniswap market for example,
+                    # if liquidity has changed in the head of this minute,
+                    # this will add the new liquidity to total_liquidity in current minute.
+                    self.__set_market_snapshot(timestamp_index, True)
 
-                self._account_status_list.append(
-                    self._broker.get_account_status(current_price, timestamp_index.to_pydatetime())
-                )
-                # notify actions in current loop
-                self.notify(self.strategy, self._currents.actions)
-                self._currents.actions = []
-                # move forward for process bar and index
-                # pbar.update()
-                row_id += 1
-        except RuntimeError as e:
-            print(f"timestamp on error: " + str(row_data.timestamp))
-            self._generate_account_status_df()
-            self.save_result("./", "backtest-with-error")
-            raise e
+                    # update broker status, e.g. re-calculate fee
+                    # and read the latest status from broker
+                    for market in self._broker.markets.values():
+                        market.update()
+
+                    snapshot = self.__get_snapshot(timestamp_index, row_id, current_price)
+                    self._strategy.after_bar(snapshot)
+
+                    account_status = self._broker.get_account_status(current_price, timestamp_index.to_pydatetime())
+                    pbar.set_description(
+                        desc=f"{timestamp_index}: {account_status.net_value:.2f} {self._broker.quote_token.name}", refresh=False
+                    )
+                    self._account_status_list.append(account_status)
+                    # notify actions in current loop
+                    self.notify(self.strategy, self._currents.actions)
+                    self._currents.actions = []
+                    # move forward for process bar and index
+                    pbar.update()
+                    row_id += 1
+            except RuntimeError as e:
+                print(f"timestamp on error: " + str(snapshot.timestamp))
+                self._generate_account_status_df()
+                self.save_result("./", "backtest-with-error")
+                raise e
 
         self.logger.info("main loop finished")
         self.__backtest_finished = True
@@ -476,7 +481,9 @@ class Actuator(object):
             self.print_result()
 
         self.__backtest_duration = time.time() - self.__start_time
-        self.logger.info(f"Backtesting finished, execute time {time.time() - self.__start_time}s")
+        self.logger.info(
+            f"Backtest with process id: {os.getpid()} finished, execute time {(time.time() - self.__start_time):.3f}s"
+        )
 
     def _generate_account_status_df(self):
         self._account_status_df: pd.DataFrame = AccountStatus.to_dataframe(self._account_status_list)
@@ -501,10 +508,14 @@ class Actuator(object):
         if not self.__backtest_finished:
             raise DemeterError("Please run strategy first")
         self.logger.info(f"Print actuator summary")
+        print("")
         print(get_formatted_predefined("Final account status", STYLE["header1"]))
+        print("")
         print(self.broker.formatted_str())
         print(get_formatted_predefined(f"Quote by: {self.broker.quote_token}", STYLE["key"]))
+        print("")
         print(get_formatted_predefined("Account balance history", STYLE["header1"]))
+        print("")
         console_text.print_dataframe_with_precision(self._account_status_df)
 
     def save_result(
@@ -532,27 +543,8 @@ class Actuator(object):
         #     raise DemeterError("Please run strategy first")
         file_name_head = file_name if file_name is not None else "backtest-" + datetime.now().strftime("%Y%m%d-%H%M%S")
         if not os.path.exists(path):
-            os.mkdir(path)
+            os.makedirs(path)
         file_list = []
-
-        # save account file
-        if file_format == "csv":
-            account_file_path = os.path.join(path, file_name_head + ".account.csv")
-        elif file_format == "pickle":
-            account_file_path = os.path.join(path, file_name_head + ".account.pkl")
-        else:
-            raise RuntimeError("File format should be csv or pickle")
-
-        df_2_save: pd.DataFrame = self._account_status_df
-        if decimals is not None:
-            df_2_save = df_2_save.astype(float).round(decimals)
-
-            # df_2_save = df_2_save.map(lambda x: round(x, decimals) if pd.api.types.is_numeric_dtype(type(x)) else x)
-        if file_format == "csv":
-            df_2_save.to_csv(account_file_path)
-        elif file_format == "pickle":
-            df_2_save.to_pickle(account_file_path, compression="gzip")
-        file_list.append(account_file_path)
 
         # save backtest file
         backtest_result = BackTestDescription(
@@ -575,6 +567,25 @@ class Actuator(object):
 
         file_list.append(pkl_name)
 
+        # save account file
+        if file_format == "csv":
+            account_file_path = os.path.join(path, file_name_head + ".account.csv")
+        elif file_format == "pickle":
+            account_file_path = os.path.join(path, file_name_head + ".account.pkl")
+        else:
+            raise RuntimeError("File format should be csv or pickle")
+
+        df_2_save: pd.DataFrame = self._account_status_df
+        if decimals is not None:
+            df_2_save = df_2_save.astype(float).round(decimals)
+
+            # df_2_save = df_2_save.map(lambda x: round(x, decimals) if pd.api.types.is_numeric_dtype(type(x)) else x)
+        if file_format == "csv":
+            df_2_save.to_csv(account_file_path)
+        elif file_format == "pickle":
+            df_2_save.to_pickle(account_file_path, compression="gzip")
+        file_list.append(account_file_path)
+
         self.logger.info(f"files have saved to {','.join(file_list)}")
         return file_list
 
@@ -596,6 +607,7 @@ class Actuator(object):
         self._strategy.actions = self._action_list
         self._strategy.assets = self.broker.assets
         self._strategy.account_status_df = self.account_status_df
+        self._strategy.actuator = self
         self._strategy.comment_last_action = self.comment_last_action
         self._strategy.log = self._log
         for k, v in self.broker.markets.items():

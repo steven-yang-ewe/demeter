@@ -12,7 +12,7 @@ from demeter import (
     Actuator,
     AtTimeTrigger,
     ActionTypeEnum,
-    RowData,
+    Snapshot,
 )
 from demeter.squeeth import SqueethMarket
 from demeter.uniswap import UniLpMarket, UniV3Pool
@@ -38,7 +38,7 @@ class SimpleStrategy(Strategy):
         new_trigger = AtTimeTrigger(time=datetime(2023, 8, 17, 23, 56, 0), do=self.buy)
         self.triggers.append(new_trigger)
 
-    def buy(self, row_data: RowData):
+    def buy(self, snapshot: Snapshot):
         market: SqueethMarket = self.broker.markets[squeeth_key]
         market.buy_squeeth(eth_amount=5)
 
@@ -48,7 +48,7 @@ class SimpleShortStrategy(Strategy):
         new_trigger = AtTimeTrigger(time=datetime(2023, 8, 17, 23, 56, 0), do=self.short)
         self.triggers.append(new_trigger)
 
-    def short(self, row_data: RowData):
+    def short(self, snapshot: Snapshot):
         market: SqueethMarket = self.broker.markets[squeeth_key]
         market.open_deposit_mint_by_collat_rate(10)
 
@@ -59,9 +59,11 @@ class SimpleShortStrategy(Strategy):
 def get_actuator():
     actuator = Actuator()
 
-    uni_market = UniLpMarket(osqth_pool, UniV3Pool(weth, oSQTH, 0.3, weth), data_path="data")
+    uni_market = UniLpMarket(osqth_pool, UniV3Pool(weth, oSQTH, 0.3, weth))
+    uni_market.data_path = "data"
     uni_market.load_data("ethereum", "0x82c427adfdf2d245ec51d8046b41c4ee87f0d29c", date(2023, 8, 14), date(2023, 8, 17))
-    squeeth_market = SqueethMarket(squeeth_key, uni_market, data_path="data")
+    squeeth_market = SqueethMarket(squeeth_key, uni_market)
+    squeeth_market.data_path = "data"
     squeeth_market.load_data(date(2023, 8, 14), date(2023, 8, 17))
     actuator.broker.add_market(uni_market)
     actuator.broker.add_market(squeeth_market)

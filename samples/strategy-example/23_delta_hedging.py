@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
-from demeter import ChainType, Strategy, TokenInfo, Actuator, MarketInfo, RowData, AtTimeTrigger, MarketTypeEnum
+from demeter import ChainType, Strategy, TokenInfo, Actuator, MarketInfo, Snapshot, AtTimeTrigger, MarketTypeEnum
 from demeter.aave import AaveV3Market
 from demeter.uniswap import UniV3Pool, UniLpMarket, V3CoreLib
 from demeter.uniswap.helper import base_unit_price_to_sqrt_price_x96
@@ -92,30 +92,30 @@ class DeltaHedgingStrategy(Strategy):
             market_aave.withdraw(s_key)
         market_uni.sell(broker.assets[eth].balance)
 
-    def change_position(self, row_data: RowData):
+    def change_position(self, snapshot: Snapshot):
         self.reset_funds()
 
-        pos_h = H * row_data.prices[eth.name]
-        pos_l = L * row_data.prices[eth.name]
+        pos_h = H * snapshot.prices[eth.name]
+        pos_l = L * snapshot.prices[eth.name]
         self.h = pos_h
         self.l = pos_l
-        total_cash = self.get_cash_net_value(row_data.prices)
+        total_cash = self.get_cash_net_value(snapshot.prices)
 
         # work
         aave_supply_value = total_cash * self.usdc_aave_supply
         aave_borrow_value = aave_supply_value * AAVE_POLYGON_USDC_ALPHA
 
         market_aave.supply(usdc, aave_supply_value)
-        market_aave.borrow(eth, aave_borrow_value / row_data.prices[eth.name])
+        market_aave.borrow(eth, aave_borrow_value / snapshot.prices[eth.name])
 
         self.last_net_value = total_cash
 
-        market_uni.sell(self.usdc_aave_borrow * total_cash / row_data.prices[eth.name])  # eth => usdc
+        market_uni.sell(self.usdc_aave_borrow * total_cash / snapshot.prices[eth.name])  # eth => usdc
 
         market_uni.add_liquidity(pos_l, pos_h)
 
         # result monitor
-        print("Position changed", row_data.timestamp)
+        print("Position changed", snapshot.timestamp)
         pass
 
     def get_cash_net_value(self, price: pd.Series):
@@ -134,11 +134,11 @@ class DeltaHedgingStrategy(Strategy):
 
         return cash + aave_status.net_value + lp_value
 
-    def on_bar(self, row_data: RowData):
-        if not self.last_net_value * Decimal("0.96") < self.get_current_net_value(row_data.prices) < self.last_net_value * Decimal("1.04"):
-            self.change_position(row_data)
-        elif not self.l <= row_data.prices[eth.name] <= self.h:
-            self.change_position(row_data)
+    def on_bar(self, snapshot: Snapshot):
+        if not self.last_net_value * Decimal("0.96") < self.get_current_net_value(snapshot.prices) < self.last_net_value * Decimal("1.04"):
+            self.change_position(snapshot)
+        elif not self.l <= snapshot.prices[eth.name] <= self.h:
+            self.change_position(snapshot)
 
 
 if __name__ == "__main__":
@@ -160,7 +160,7 @@ if __name__ == "__main__":
     market_uni.load_data(ChainType.polygon.name, "0x45dda9cb7c25131df268515131f647d726f50608", start_date, end_date)
     broker.add_market(market_uni)  # add market
 
-    market_aave = AaveV3Market(market_key_aave, "../../tests/aave_risk_parameters/polygon.csv", [usdc, eth])
+    market_aave = AaveV3Market(market_key_aave, "../../tests/aave_risk_parameters/demo.csv", [usdc, eth])
     market_aave.data_path = "../data/"
     market_aave.load_data(ChainType.polygon, [usdc, eth], start_date, end_date)
     broker.add_market(market_aave)  # add market

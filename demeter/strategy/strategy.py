@@ -1,9 +1,12 @@
+from datetime import datetime
 from typing import List, Callable
 
 import pandas as pd
 
 from .trigger import Trigger
-from .. import Broker, MarketDict, AccountStatus, AssetDict, Asset, RowData
+from .. import Broker, MarketDict, AccountStatus, AssetDict, Asset, Snapshot
+
+# from ..core import Actuator
 from .._typing import DemeterError
 from ..broker import MarketInfo, BaseAction, Market
 
@@ -21,10 +24,11 @@ class Strategy(object):
         self.triggers: [Trigger] = []
         self.account_status: List[AccountStatus] = []
         self.account_status_df: pd.DataFrame | None = None
-        self.comment_last_action: Callable = lambda msg: msg
+        self.comment_last_action: Callable[[str], None] | None = None
         self.assets: AssetDict[Asset] = AssetDict()
         self.actions: List[BaseAction] = []
-        self.log: Callable = lambda t, msg, info: msg
+        self.actuator = None
+        self.log: Callable[[datetime, str, int], None] | None = None
 
     def initialize(self):
         """
@@ -33,21 +37,27 @@ class Strategy(object):
         """
         pass
 
-    def on_bar(self, row_data: RowData):
+    def before_bar(self, snapshot: Snapshot):
         """
-        Called after triggers on each iteration, at this time, market are not updated yet(Take uniswap market for example, fee of this minute are not added to positions).
-
-        :param row_data: data in this iteration, include current timestamp, price, all columns data, and indicators(such as simple moving average)
-        :type row_data: RowData
+        Called before trigger and on_bar on each iteration
         """
         pass
 
-    def after_bar(self, row_data: RowData):
+    def on_bar(self, snapshot: Snapshot):
+        """
+        Called after triggers on each iteration, at this time, market are not updated yet(Take uniswap market for example, fee of this minute are not added to positions).
+
+        :param snapshot: data in this iteration, include current timestamp, price, all columns data, and indicators(such as simple moving average)
+        :type snapshot: Snapshot
+        """
+        pass
+
+    def after_bar(self, snapshot: Snapshot):
         """
         called after market are updated on each iteration
 
-        :param row_data: data in this iteration, include current timestamp, price, all columns data, and indicators(such as simple moving average)
-        :type row_data: RowData
+        :param snapshot: data in this iteration, include current timestamp, price, all columns data, and indicators(such as simple moving average)
+        :type snapshot: Snapshot
         """
         pass
 

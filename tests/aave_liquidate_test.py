@@ -4,7 +4,7 @@ from _decimal import Decimal
 from datetime import datetime
 from io import StringIO
 
-from demeter import TokenInfo, Actuator, Strategy, RowData, MarketInfo, MarketTypeEnum, AtTimeTrigger, BaseAction
+from demeter import TokenInfo, Actuator, Strategy, Snapshot, MarketInfo, MarketTypeEnum, AtTimeTrigger, BaseAction
 from demeter.aave import AaveV3Market, LiquidationAction
 
 # To print all the columns of dataframe, we should set up display option.
@@ -69,10 +69,10 @@ class LiquidiateStrategy(Strategy):
         supply_trigger = AtTimeTrigger(time=datetime(2023, 8, 15, 0, 0), do=self.supply_and_borrow)
         self.triggers.extend([supply_trigger])
 
-    def supply_and_borrow(self, row_data: RowData):
+    def supply_and_borrow(self, snapshot: Snapshot):
         aave_market: AaveV3Market = self.broker.markets[market_key]
-        supply_key = aave_market.supply(weth, 10, True)
-        borrow_key = aave_market.borrow(usdc, 7500)
+        aave_market.supply(weth, 10, True)
+        aave_market.borrow(usdc, 7500)
 
     def notify(self, action: BaseAction):
         if isinstance(action, LiquidationAction):
@@ -81,7 +81,7 @@ class LiquidiateStrategy(Strategy):
 
 class TestActuator(unittest.TestCase):
     def test_delt_larger_than_collateral(self):
-        aave_market = AaveV3Market(market_info=market_key, risk_parameters_path="aave_risk_parameters/polygon.csv", tokens=[weth, usdc])
+        aave_market = AaveV3Market(market_info=market_key, risk_parameters_path="aave_risk_parameters/demo.csv", tokens=[weth, usdc])
 
         aave_market.set_token_data(weth, pd.read_csv(StringIO(simple_data_csv), index_col=0, parse_dates=True))
         aave_market.set_token_data(usdc, pd.read_csv(StringIO(simple_data_csv), index_col=0, parse_dates=True))
@@ -99,7 +99,7 @@ class TestActuator(unittest.TestCase):
         pass
 
     def test_delt_larger_than_collateral_with_growing_liqindex(self):
-        aave_market = AaveV3Market(market_info=market_key, risk_parameters_path="aave_risk_parameters/polygon.csv", tokens=[weth, usdc])
+        aave_market = AaveV3Market(market_info=market_key, risk_parameters_path="aave_risk_parameters/demo.csv", tokens=[weth, usdc])
 
         aave_market.set_token_data(weth, pd.read_csv(StringIO(simple_data_growing_index_csv), index_col=0, parse_dates=True))
         aave_market.set_token_data(usdc, pd.read_csv(StringIO(simple_data_growing_index_csv), index_col=0, parse_dates=True))
@@ -117,7 +117,7 @@ class TestActuator(unittest.TestCase):
         pass
 
     def test_liquidate_all(self):
-        aave_market = AaveV3Market(market_info=market_key, risk_parameters_path="aave_risk_parameters/polygon.csv", tokens=[weth, usdc])
+        aave_market = AaveV3Market(market_info=market_key, risk_parameters_path="aave_risk_parameters/demo.csv", tokens=[weth, usdc])
 
         aave_market.set_token_data(weth, pd.read_csv(StringIO(simple_data_csv), index_col=0, parse_dates=True))
         aave_market.set_token_data(usdc, pd.read_csv(StringIO(simple_data_csv), index_col=0, parse_dates=True))
@@ -135,7 +135,7 @@ class TestActuator(unittest.TestCase):
         pass
 
     def test_liquidate_half(self):
-        aave_market = AaveV3Market(market_info=market_key, risk_parameters_path="aave_risk_parameters/polygon.csv", tokens=[weth, usdc])
+        aave_market = AaveV3Market(market_info=market_key, risk_parameters_path="aave_risk_parameters/demo.csv", tokens=[weth, usdc])
 
         aave_market.set_token_data(weth, pd.read_csv(StringIO(simple_data_csv), index_col=0, parse_dates=True))
         aave_market.set_token_data(usdc, pd.read_csv(StringIO(simple_data_csv), index_col=0, parse_dates=True))

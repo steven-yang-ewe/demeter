@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import numpy as np
-from demeter import TokenInfo, PriceTrigger, MarketDict, MarketInfo, AtTimeTrigger, PeriodTrigger, MarketStatus, RowData
+from demeter import TokenInfo, PriceTrigger, MarketDict, MarketInfo, AtTimeTrigger, PeriodTrigger, MarketStatus, Snapshot
 
 eth = TokenInfo(name="weth", decimal=18, address="0x7ceb23fd6bc0add59e62ac25578270cff1b9f619")
 usdc = TokenInfo(name="usdc", decimal=6)
@@ -12,7 +12,7 @@ usdc = TokenInfo(name="usdc", decimal=6)
 class UniLpCoreTest(unittest.TestCase):
     @staticmethod
     def __get_moke_row_data(timestamp, prices) -> MarketDict[MarketStatus]:
-        d = RowData(timestamp=timestamp, row_id=0, prices=prices)
+        d = Snapshot(timestamp=timestamp, row_id=0, prices=prices)
         d.market_status[MarketInfo("m")] = pd.Series()
         return d
 
@@ -32,7 +32,7 @@ class UniLpCoreTest(unittest.TestCase):
         match_price = []
         price_df = UniLpCoreTest.__get_price_df()
         pt = PriceTrigger(
-            condition=lambda p: p["eth"] > 1714.35, do=lambda row_data: match_price.append(row_data.prices["eth"])
+            condition=lambda p: p["eth"] > 1714.35, do=lambda snapshot: match_price.append(snapshot.prices["eth"])
         )
         self.__run(price_df, pt)
         self.assertEqual(len(match_price), 4)
@@ -41,7 +41,7 @@ class UniLpCoreTest(unittest.TestCase):
         match_time = []
         price_df = UniLpCoreTest.__get_price_df()
         pt = AtTimeTrigger(
-            time=datetime(2023, 5, 1, 23, 59, 0), do=lambda row_data: match_time.append(row_data.timestamp)
+            time=datetime(2023, 5, 1, 23, 59, 0), do=lambda snapshot: match_time.append(snapshot.timestamp)
         )
         self.__run(price_df, pt)
         self.assertEqual(len(match_time), 1)
@@ -50,7 +50,7 @@ class UniLpCoreTest(unittest.TestCase):
     def test_period_trigger(self):
         matched_time = []
         price_df = UniLpCoreTest.__get_price_df()
-        pt = PeriodTrigger(time_delta=timedelta(hours=1), do=lambda row_data: matched_time.append(row_data.timestamp))
+        pt = PeriodTrigger(time_delta=timedelta(hours=1), do=lambda snapshot: matched_time.append(snapshot.timestamp))
         self.__run(price_df, pt)
         self.assertEqual(len(matched_time), 23)
         self.assertIn(price_df.index[1 * 60], matched_time)
@@ -64,7 +64,7 @@ class UniLpCoreTest(unittest.TestCase):
         price_df = UniLpCoreTest.__get_price_df()
         pt = PeriodTrigger(
             time_delta=timedelta(hours=1),
-            do=lambda row_data: matched_time.append(row_data.timestamp),
+            do=lambda snapshot: matched_time.append(snapshot.timestamp),
             pending=timedelta(minutes=5),
         )
         self.__run(price_df, pt)
@@ -81,7 +81,7 @@ class UniLpCoreTest(unittest.TestCase):
         pt = PeriodTrigger(
             time_delta=timedelta(hours=1),
             trigger_immediately=True,
-            do=lambda row_data: matched_time.append(row_data.timestamp),
+            do=lambda snapshot: matched_time.append(snapshot.timestamp),
         )
         self.__run(price_df, pt)
         self.assertEqual(len(matched_time), 24)
@@ -99,7 +99,7 @@ class UniLpCoreTest(unittest.TestCase):
         price_df = UniLpCoreTest.__get_price_df()
         pt = AtTimeTrigger(
             time=datetime(2023, 5, 1, 23, 59, 0),
-            do=lambda row_data, extra_param1: param_container.append(extra_param1),
+            do=lambda snapshot, extra_param1: param_container.append(extra_param1),
             extra_param1=3,
         )
         self.__run(price_df, pt)
@@ -114,7 +114,7 @@ class UniLpCoreTest(unittest.TestCase):
         price_df = UniLpCoreTest.__get_price_df()
         pt = AtTimeTrigger(
             time=datetime(2023, 5, 1, 23, 59, 0),
-            do=lambda row_data, extra_param1: param_container.append(extra_param1),
+            do=lambda snapshot, extra_param1: param_container.append(extra_param1),
             extra_param1=3,
         )
         self.__run(price_df, pt)

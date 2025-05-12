@@ -3,7 +3,7 @@ from datetime import timedelta, date
 
 import pandas as pd
 
-from demeter import TokenInfo, Actuator, Strategy, RowData, simple_moving_average, ChainType, MarketInfo, PeriodTrigger, BaseAction
+from demeter import TokenInfo, Actuator, Strategy, Snapshot, simple_moving_average, ChainType, MarketInfo, PeriodTrigger, BaseAction
 from demeter.uniswap import UniV3Pool, UniLpMarket
 
 pd.options.display.max_columns = None
@@ -46,41 +46,37 @@ class DemoStrategy(Strategy):
         # Register a trigger, every day, we split both assets into two shares of equal value
         self.triggers.append(PeriodTrigger(time_delta=timedelta(days=1), trigger_immediately=True, do=self.rebalance))
 
-        self.data_logs = []
-
-    def rebalance(self, row_data: RowData):
-        self.markets[market_key].even_rebalance(row_data.market_status[market_key].price)
+    def rebalance(self, snapshot: Snapshot):
+        self.markets[market_key].even_rebalance(snapshot.market_status[market_key].price)
 
     """
     After a test is executed, actuator will loop the data, and bar series functions will be called on every time. 
     Here you can set conditions and execute liquidity operations 
     """
 
-    def on_bar(self, row_data: RowData):
+    def on_bar(self, snapshot: Snapshot):
         """
         This function is called after trigger, but before market is updated(Fees will be distributed in this step).
         """
         lp_market: UniLpMarket = self.markets[market_key]
-        current_price = row_data.market_status[market_key].price
+        current_price = snapshot.market_status[market_key].price
         # get moving average price, if value is nan, fill it with current price
-        ma_price = self.data[market_key].loc[row_data.timestamp]["sma"]
-        ma_price = row_data.market_status[market_key].price if math.isnan(ma_price) else ma_price
-
-        self.data_logs.append("sma: "+repr(ma_price) +", id: "+ str(row_data.row_id)+", record: "+row_data.prices.to_string())
+        ma_price = self.data[market_key].loc[snapshot.timestamp]["sma"]
+        ma_price = snapshot.market_status[market_key].price if math.isnan(ma_price) else ma_price
 
         # this is a nonsense strategy, just to show how to trigger actions
-        if row_data.market_status[market_key].price > ma_price + 25 and len(self.markets[market_key].positions) < 1:
+        if snapshot.market_status[market_key].price > ma_price + 25 and len(self.markets[market_key].positions) < 1:
             lp_market.remove_all_liquidity()
             lp_market.add_liquidity(current_price, current_price + 100)
-        elif row_data.market_status[market_key].price < ma_price - 25 and len(self.markets[market_key].positions) < 1:
+        elif snapshot.market_status[market_key].price < ma_price - 25 and len(self.markets[market_key].positions) < 1:
             lp_market.remove_all_liquidity()
             lp_market.add_liquidity(current_price - 100, current_price)
 
-    def after_bar(self, row_data: RowData):
+    def after_bar(self, snapshot: Snapshot):
         """
         this function is called after market has updated.
         """
-        timestamp = row_data.timestamp
+        timestamp = snapshot.timestamp
         net_value_after_bar = self.broker.get_account_status(self.prices.loc[timestamp]).net_value
         net_value_diff = net_value_after_bar - self.net_value_before_bar
         self.net_value_diff_list.append(net_value_diff)
@@ -98,9 +94,6 @@ class DemoStrategy(Strategy):
         """
         print("\n")
         print(action.timestamp, action.action_type.value)
-
-    def print_logs(self):
-        print(*self.data_logs, sep='\n')
 
 
 if __name__ == "__main__":
@@ -126,4 +119,3 @@ if __name__ == "__main__":
     actuator.print_action=True
 
     actuator.run()  # run actuator
-    actuator.strategy.print_logs()

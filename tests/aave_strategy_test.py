@@ -1,8 +1,7 @@
 import unittest
 from _decimal import Decimal
-from datetime import date, datetime
+from datetime import datetime
 from io import StringIO
-from typing import Union
 
 import pandas as pd
 
@@ -10,14 +9,12 @@ from demeter import (
     TokenInfo,
     Actuator,
     Strategy,
-    RowData,
+    Snapshot,
     MarketInfo,
-    MarketDict,
     MarketTypeEnum,
-    ChainType,
     AtTimeTrigger,
 )
-from demeter.aave import AaveBalance, InterestRateMode, AaveV3Market, AaveTokenStatus
+from demeter.aave import AaveV3Market
 
 # To print all the columns of dataframe, we should set up display option.
 pd.options.display.max_columns = None
@@ -75,10 +72,10 @@ class BasicStrategy(Strategy):
         supply_trigger = AtTimeTrigger(time=datetime(2023, 8, 15, 0, 0), do=self.supply_and_borrow)
         self.triggers.extend([supply_trigger])
 
-    def supply_and_borrow(self, row_data: RowData):
+    def supply_and_borrow(self, snapshot: Snapshot):
         aave_market: AaveV3Market = self.broker.markets[market_key]
-        supply_key = aave_market.supply(weth, 10, True)
-        borrow_key = aave_market.borrow(weth, 7)
+        aave_market.supply(weth, 10, True)
+        aave_market.borrow(weth, 7)
 
 
 class AllOperationStrategy(Strategy):
@@ -88,17 +85,17 @@ class AllOperationStrategy(Strategy):
         withdraw_trigger = AtTimeTrigger(time=datetime(2023, 8, 15, 0, 8), do=self.withdraw)
         self.triggers.extend([supply_trigger, repay_trigger, withdraw_trigger])
 
-    def supply_and_borrow(self, row_data: RowData):
+    def supply_and_borrow(self, snapshot: Snapshot):
         aave_market: AaveV3Market = self.broker.markets[market_key]
-        supply_key = aave_market.supply(weth, 10, True)
-        borrow_key = aave_market.borrow(weth, 7)
+        aave_market.supply(weth, 10, True)
+        aave_market.borrow(weth, 7)
 
-    def repay(self, row_data: RowData):
+    def repay(self, snapshot: Snapshot):
         aave_market: AaveV3Market = self.broker.markets[market_key]
         for key in aave_market.borrow_keys:
             aave_market.repay(key)
 
-    def withdraw(self, row_data: RowData):
+    def withdraw(self, snapshot: Snapshot):
         aave_market: AaveV3Market = self.broker.markets[market_key]
         for key in aave_market.supply_keys:
             aave_market.withdraw(key)
@@ -110,20 +107,20 @@ class RepayWithCollateralStrategy(Strategy):
         repay_trigger = AtTimeTrigger(time=datetime(2023, 8, 15, 0, 7), do=self.repay)
         self.triggers.extend([supply_trigger, repay_trigger])
 
-    def supply_and_borrow(self, row_data: RowData):
+    def supply_and_borrow(self, snapshot: Snapshot):
         aave_market: AaveV3Market = self.broker.markets[market_key]
         supply_key = aave_market.supply(weth, 10, True)
         borrow_key = aave_market.borrow(weth, aave_market.get_max_borrow_amount(weth))
 
-    def repay(self, row_data: RowData):
+    def repay(self, snapshot: Snapshot):
         aave_market: AaveV3Market = self.broker.markets[market_key]
-        aave_market.repay(borrow_token=weth, interest_rate_mode=InterestRateMode.variable, repay_with_collateral=True)
+        aave_market.repay(borrow_token=weth, repay_with_collateral=True)
 
 
 class TestActuator(unittest.TestCase):
     def test_basic(self):
         aave_market = AaveV3Market(
-            market_info=market_key, risk_parameters_path="./aave_risk_parameters/polygon.csv", tokens=[weth]
+            market_info=market_key, risk_parameters_path="aave_risk_parameters/demo.csv", tokens=[weth]
         )
 
         aave_market.set_token_data(weth, pd.read_csv(StringIO(eth_data_csv), index_col=0, parse_dates=True))
@@ -142,7 +139,7 @@ class TestActuator(unittest.TestCase):
 
     def test_all_operation(self):
         aave_market = AaveV3Market(
-            market_info=market_key, risk_parameters_path="./aave_risk_parameters/polygon.csv", tokens=[weth]
+            market_info=market_key, risk_parameters_path="aave_risk_parameters/demo.csv", tokens=[weth]
         )
 
         aave_market.set_token_data(weth, pd.read_csv(StringIO(eth_data_csv), index_col=0, parse_dates=True))
@@ -167,7 +164,7 @@ class TestActuator(unittest.TestCase):
 
     def test_repay_with_collateral(self):
         aave_market = AaveV3Market(
-            market_info=market_key, risk_parameters_path="./aave_risk_parameters/polygon.csv", tokens=[weth]
+            market_info=market_key, risk_parameters_path="aave_risk_parameters/demo.csv", tokens=[weth]
         )
 
         aave_market.set_token_data(weth, pd.read_csv(StringIO(eth_data_csv), index_col=0, parse_dates=True))

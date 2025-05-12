@@ -1,10 +1,10 @@
-import numpy as np
-import os
-import pandas as pd
-from datetime import date, timedelta, datetime, time
+from datetime import date
 from decimal import Decimal
 from typing import Dict, Tuple
+
+import numpy as np
 import orjson
+import pandas as pd
 
 from ._typing import (
     UniV3Pool,
@@ -24,7 +24,7 @@ from ._typing import (
     PositionStatus,
 )
 from .core import V3CoreLib
-from .data import fillna, resample
+from .data import resample
 from .helper import (
     tick_to_base_unit_price,
     base_unit_price_to_tick,
@@ -35,6 +35,9 @@ from .helper import (
     MIN_ERROR,
     nearest_usable_tick,
     sqrt_price_x96_to_tick,
+    load_uni_v3_data,
+    get_price_from_data,
+    _add_statistic_column,
 )
 from .liquitidy_math import (
     get_sqrt_ratio_at_tick,
@@ -43,16 +46,13 @@ from .liquitidy_math import (
     get_liquidity_for_amount0,
     get_liquidity_for_amount1,
 )
-from .. import MarketTypeEnum
 from .._typing import DemeterError, DECIMAL_0, UnitDecimal
 from ..broker import MarketBalance, Market, MarketInfo, write_func
-from ..data import CacheManager
 from ..utils import (
     get_formatted_from_dict,
     get_formatted_predefined,
     STYLE,
     float_param_formatter,
-    to_decimal,
     require,
 )
 
@@ -66,14 +66,15 @@ class UniLpMarket(Market):
     :type market_info: MarketInfo
     :param pool_info: Uniswap v3 pool info
     :type pool_info: UniV3Pool
-    :param data: pool data for back test. downloaded by demeter-fetch
-    :type data: pd.DataFrame
-    :param data_path: path to load pool data
-    :type data_path: str
+
     """
 
     def __init__(
-        self, market_info: MarketInfo, pool_info: UniV3Pool, data: pd.DataFrame = None, data_path: str = "./data"
+        self,
+        market_info: MarketInfo,
+        pool_info: UniV3Pool,
+        data: pd.DataFrame = None,
+        data_path: str = "./data",
     ):
         super().__init__(market_info=market_info, data=data, data_path=data_path)
         self._pool: UniV3Pool = pool_info
@@ -88,7 +89,7 @@ class UniLpMarket(Market):
         # internal temporary variable
         # self.action_buffer = []
         # tick of last minute(previous minute), to compatible with old version, keep default as None
-        self.last_tick: int = None
+        self.last_tick: int | None = None
 
     # region properties
 
@@ -197,21 +198,6 @@ class UniLpMarket(Market):
         market_status.data.currentLiquidity = market_status.data.currentLiquidity + total_virtual_liq
         self._market_status = market_status
 
-    def get_price_from_data(self) -> Tuple[pd.DataFrame, TokenInfo]:
-        """
-        Extract token pair price from pool data.
-
-        :return: a dataframe includes quote token price, and quote token price will be set to 1
-        :rtype: Tuple[pd.DataFrame, TokenInfo]
-
-        """
-        if self.data is None:
-            raise DemeterError("data has not set")
-        price_series: pd.Series = self.data.price
-        df = pd.DataFrame(index=price_series.index, data={self.base_token.name: price_series})
-        df[self.quote_token.name] = 1
-        return df, self.quote_token
-
     def _convert_pair(self, any0, any1):
         """
         convert order of token0/token1 to base_token/quote_token, according to self.is_token0_quote.
@@ -220,7 +206,7 @@ class UniLpMarket(Market):
 
         :param any0: token0 or any property of token0, e.g. balance...
         :param any1: token1 or any property of token1, e.g. balance...
-        :return: (base,qoute) or (token0,token1)
+        :return: (base,quote) or (token0,token1)
         """
         return (any1, any0) if self._is_token0_quote else (any0, any1)
 
@@ -266,6 +252,10 @@ class UniLpMarket(Market):
         return base * pool_price + quote
 
     def get_position_status(self, pos_key: PositionInfo) -> PositionStatus:
+        """
+        Get position amounts, including amount, fee
+
+        """
         require(pos_key in self.positions, "Position not exist")
 
         pool_price = self._market_status.data.price
@@ -291,6 +281,10 @@ class UniLpMarket(Market):
         )
 
     def get_position_amount(self, position_info: PositionInfo) -> Tuple[Decimal, Decimal]:
+        """
+        Calculate amount0 and amount1 of a position
+
+        """
         if position_info not in self.positions:
             return DECIMAL_0, DECIMAL_0
         pool_price = self._market_status.data.price
@@ -332,29 +326,38 @@ class UniLpMarket(Market):
             deposit_amount0 += amount0
             deposit_amount1 += amount1
 
-        base_deposit_amount, quote_deposit_amount = self._convert_pair(deposit_amount0, deposit_amount1)
-
-        net_value = (base_fee_sum + base_deposit_amount) * pool_price[self.base_token.name] + (
-            quote_fee_sum + quote_deposit_amount
-        ) * pool_price[self.quote_token.name]
+        liq_of_base, liq_of_quote = self._convert_pair(deposit_amount0, deposit_amount1)
+        base_price = pool_price[self.base_token.name]
+        quote_price = pool_price[self.quote_token.name]
+        liquidity_value = liq_of_base * base_price + liq_of_quote * quote_price
+        fee_value = base_fee_sum * base_price + quote_fee_sum * quote_price
 
         val = UniLpBalance(
-            net_value=net_value,
+            net_value=fee_value + liquidity_value,
+            liquidity_value=UnitDecimal(liquidity_value, self.quote_token.name),
             base_uncollected=UnitDecimal(base_fee_sum, self.base_token.name),
             quote_uncollected=UnitDecimal(quote_fee_sum, self.quote_token.name),
-            base_in_position=UnitDecimal(base_deposit_amount, self.base_token.name),
-            quote_in_position=UnitDecimal(quote_deposit_amount, self.quote_token.name),
+            base_in_position=UnitDecimal(liq_of_base, self.base_token.name),
+            quote_in_position=UnitDecimal(liq_of_quote, self.quote_token.name),
             position_count=len(list(filter(lambda p: not p.transferred, self._positions.values()))),
         )
         return val
 
     def transfer_position_out(self, position_info: PositionInfo):
+        """
+        Move position out, so It will not be count in total net value
+
+        """
         if position_info in self.positions and not self.positions[position_info].transferred:
             self.positions[position_info].transferred = True
         else:
             raise DemeterError("position not exist or has transferred out ")
 
     def transfer_position_in(self, position_info: PositionInfo):
+        """
+        Move position back in,
+
+        """
         if position_info in self.positions and self.positions[position_info].transferred:
             self.positions[position_info].transferred = False
         else:
@@ -484,7 +487,12 @@ class UniLpMarket(Market):
 
         if sqrt_price_x96 == -1:
             # self.current_tick must be initialed
-            sqrt_price_x96 = get_sqrt_ratio_at_tick(self.market_status.data.closeTick)
+            sqrt_price_x96 = base_unit_price_to_sqrt_price_x96(
+                self.market_status.data.price,
+                self._pool.token0.decimal,
+                self._pool.token1.decimal,
+                self._is_token0_quote,
+            )
         if lower_tick > upper_tick:
             raise DemeterError("lower tick should be less than upper tick")
 
@@ -725,7 +733,7 @@ class UniLpMarket(Market):
         :type position: PositionInfo
         :param liquidity: liquidity amount to remove, if set to None, all the liquidity will be removed
         :type liquidity: int
-        :param collect: collect or not, if collect, will call collect function. and tokens will be sent to broker. if not, token will be kept in fee property of postion
+        :param collect: collect or not, if collect, will call collect function. and tokens will be sent to broker. if not, token will be kept in fee property of position
         :type collect: bool
         :param sqrt_price_x96: precise price.  if set to none, it will be calculated from current price.
         :type sqrt_price_x96: int
@@ -818,6 +826,15 @@ class UniLpMarket(Market):
         price: Decimal | float = None,
         throw_action=True,
     ):
+        """
+        Swap token with this pool.
+
+        :param from_amount: amount to spend
+        :param from_token: token to spend
+        :param to_token: token to get
+        :param price: price, if leave to none, will use current price.
+        :param throw_action: leave a log
+        """
         if from_token == to_token:
             raise DemeterError("from and to token can not same")
         if from_token not in [self.quote_token, self.base_token] or to_token not in [self.quote_token, self.base_token]:
@@ -937,7 +954,7 @@ class UniLpMarket(Market):
             lower_tick = nearest_usable_tick(lower_tick, self.pool_info.tick_spacing)
             upper_tick = nearest_usable_tick(upper_tick, self.pool_info.tick_spacing)
         price = self._market_status.data.price
-        tick = self._market_status.data.closeTick
+        tick = self.price_to_tick(price)
         price0, price1 = self._convert_pair(price, Decimal(1))
 
         quote_balance = self.broker.get_token_balance(self.quote_token)
@@ -1048,114 +1065,6 @@ class UniLpMarket(Market):
         for position_key in keys:
             self.remove_liquidity(position_key)
 
-    def add_statistic_column(self, df: pd.DataFrame):
-        """
-        add statistic column to data, new columns including:
-
-        * open: open price
-        * price: close price (current price)
-        * low: lowest price
-        * high: height price
-        * volume0: swap volume for token 0
-        * volume1: swap volume for token 1
-
-        :param df: original data
-        :type df: pd.DataFrame
-
-        """
-        # add statistic column
-        df["open"] = df["openTick"].map(lambda x: self.tick_to_price(x))
-        df["price"] = df["closeTick"].map(lambda x: self.tick_to_price(x))
-        high_name, low_name = (
-            ("lowestTick", "highestTick") if self.pool_info.is_token0_quote else ("highestTick", "lowestTick")
-        )
-        df["low"] = df[high_name].map(lambda x: self.tick_to_price(x))
-        df["high"] = df[low_name].map(lambda x: self.tick_to_price(x))
-        df["volume0"] = df["inAmount0"].map(lambda x: Decimal(x) / 10**self.pool_info.token0.decimal)
-        df["volume1"] = df["inAmount1"].map(lambda x: Decimal(x) / 10**self.pool_info.token1.decimal)
-
-    def load_data(self, chain: str, contract_addr: str, start_date: date, end_date: date):
-        """
-
-        load data, and preprocess. preprocess actions including:
-
-        * fill empty data
-        * calculate statistic column
-        * set timestamp as index
-
-        :param chain: chain name
-        :type chain: str
-        :param contract_addr: pool contract address
-        :type contract_addr: str
-        :param start_date: start test date
-        :type start_date: date
-        :param end_date: end test date
-        :type end_date: date
-        """
-        cache_key = CacheManager.get_cache_key(self.market_info.type.name, start_date, end_date, chain, contract_addr)
-        cache_df = CacheManager.load(cache_key)
-        if cache_df is not None:
-            self.data = cache_df
-            return
-
-        self.logger.info(f"start load files from {start_date} to {end_date}...")
-        df = pd.DataFrame()
-        day = start_date
-        if start_date > end_date:
-            raise DemeterError(f"start date {start_date} should earlier than end date {end_date}")
-        while day <= end_date:
-            new_type_path = os.path.join(
-                self.data_path,
-                f"{chain.lower()}-{contract_addr}-{day.strftime('%Y-%m-%d')}.minute.csv",
-            )
-            path = (
-                new_type_path
-                if os.path.exists(new_type_path)
-                else os.path.join(
-                    self.data_path,
-                    f"{chain}-{contract_addr}-{day.strftime('%Y-%m-%d')}.csv",
-                )
-            )
-            if not os.path.exists(path):
-                raise IOError(
-                    f"resource file {new_type_path} not found, please download with demeter-fetch: https://github.com/zelos-alpha/demeter-fetch"
-                )
-            day_df = pd.read_csv(
-                path,
-                converters={
-                    "inAmount0": to_decimal,
-                    "inAmount1": to_decimal,
-                    "netAmount0": to_decimal,
-                    "netAmount1": to_decimal,
-                    "currentLiquidity": to_decimal,
-                },
-            )
-            if len(day_df.index) > 0:
-                df = pd.concat([df, day_df])
-            day = day + timedelta(days=1)
-        self.logger.info("load file complete, preparing...")
-
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df.set_index("timestamp", inplace=True)
-
-        # fill empty row (first minutes in a day, might be blank)
-        full_indexes = pd.date_range(
-            start=start_date,
-            end=datetime.combine(end_date, time(0, 0, 0)) + timedelta(days=1) - timedelta(minutes=1),
-            freq="1min",
-        )
-        df = df.reindex(full_indexes)
-        # df = Lines.from_dataframe(df)
-        # df = df.fillna()
-        df: pd.DataFrame = fillna(df)
-        if pd.isna(df.iloc[0]["closeTick"]):
-            df = df.bfill()
-
-        self.add_statistic_column(df)
-        self.data = df
-        CacheManager.save(cache_key, df)
-        self.logger.info("data has been prepared")
-
     def formatted_str(self) -> str:
         """
         Return a brief description of this market in pretty format. Used for print in console.
@@ -1181,4 +1090,13 @@ class UniLpMarket(Market):
         return value
 
     def _resample(self, freq: str):
-        self._data = resample(self.data, freq)
+        self._data = resample(self._data, freq)
+
+    def load_data(self, chain: str, contract_addr: str, start_date: date, end_date: date):
+        self.data = load_uni_v3_data(self.pool_info, chain, contract_addr, start_date, end_date, self.data_path)
+
+    def get_price_from_data(self):
+        return get_price_from_data(self.data, self.pool_info)
+
+    def add_statistic_column(self, df: pd.DataFrame):
+        _add_statistic_column(df, self.pool_info)

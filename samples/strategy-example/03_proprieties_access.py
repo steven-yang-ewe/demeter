@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 import pandas as pd
 
-from demeter import TokenInfo, Actuator, Strategy, RowData, ChainType, MarketInfo, MarketDict, AtTimeTrigger
+from demeter import TokenInfo, Actuator, Strategy, Snapshot, ChainType, MarketInfo, MarketDict, AtTimeTrigger
 from demeter.uniswap import UniV3Pool, UniLpMarket
 from demeter.metrics import performance_metrics
 
@@ -39,7 +39,7 @@ class DemoStrategy(Strategy):
 
 
 
-    def work(self, row_data: RowData):
+    def work(self, snapshot: Snapshot):
         # access market, all market are stored in a property, whose type is MarketDict.
         # you can access elements of MarketDict by
         # 1. market key as index

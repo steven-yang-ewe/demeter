@@ -62,6 +62,9 @@ class ShortInfo:
     consecutive_short_stop_loss_cnt: int = 0
     short_total_gain: Decimal = ZERO
     short_total_loss: Decimal = ZERO
+    short_to_lp: Decimal = ZERO
+    lp_to_short: Decimal = ZERO
+
 
 class TestParams:
 

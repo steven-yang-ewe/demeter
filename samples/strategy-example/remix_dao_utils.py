@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from pandas import Series
 
-from demeter import RowData, MarketInfo, Trigger
+from demeter import Snapshot, MarketInfo, Trigger
 from demeter.result import MetricEnum, annualized_return, return_rate, sharpe_ratio, volatility, max_draw_down, \
     return_value, alpha_beta
 from demeter.uniswap import UniLpMarket, PositionInfo, Position
@@ -28,7 +28,7 @@ from demeter.uniswap import UniLpMarket, PositionInfo, Position
 #     def set_current_position_info(self, position_info: PositionInfo):
 #         self.current_position_info = position_info
 #
-#     def get_lp_row_data(self, row_data: RowData) -> Series:
+#     def get_lp_row_data(self, row_data: Snapshot) -> Series:
 #         return row_data.market_status[self.market_key]
 
 
@@ -79,7 +79,7 @@ class RemixDaoUtils:
     def set_current_position_info(self, position_info: PositionInfo):
         self.current_position_info = position_info
 
-    def get_lp_row_data(self, row_data: RowData) -> Series:
+    def get_lp_row_data(self, row_data: Snapshot) -> Series:
         """
         data in the csv with added column with extra calculation
 
@@ -193,7 +193,7 @@ class RemixDaoUtils:
 
         return new_tick_lower, new_tick_upper
 
-    def get_tick_info(self, row_data: RowData) -> Tuple[
+    def get_tick_info(self, row_data: Snapshot) -> Tuple[
         int, int, int, int]:  # (int24 tickSpacing, int24 currentTick, int24 currentTickLower, int24 currentTickUpper)
 
         tick_spacing = self.params.tick_spacing  # IStrategyInfo(strategyAddress).tickSpacing();
@@ -208,11 +208,22 @@ class RemixDaoUtils:
             current_tick_lower, current_tick_upper = 0, 0
         else:
             current_tick_lower, current_tick_upper = pos_info[0], pos_info[1]
-        lp_row_data = self.get_lp_row_data(row_data)
-        current_tick = lp_row_data.closeTick
+        # lp_row_data = self.get_lp_row_data(row_data)
+        # current_tick = lp_row_data.closeTick
+        # current_tick = lp_row_data.openTick
+        # lp_market: UniLpMarket = self.lp_market.broker.markets[self.market_key]
+        current_price = self.get_current_price(row_data)
+        current_tick = self.lp_market.price_to_tick(current_price)
         return tick_spacing, current_tick, current_tick_lower, current_tick_upper
 
-    def verify_and_get_new_rescale_tick_boundary(self, row_data: RowData, was_in_range: bool,
+    def get_current_price(self, snapshot: Snapshot) -> Decimal:
+        # lp_row_data = self.get_lp_row_data(snapshot)
+        # return lp_row_data.open
+        lp_market: UniLpMarket = self.lp_market.broker.markets[self.market_key]
+        return lp_market.market_status.data.price
+    pass
+
+    def verify_and_get_new_rescale_tick_boundary(self, row_data: Snapshot, was_in_range: bool,
                                                  last_rescale_tick: int) -> (bool, int, int):
         # Get Tick Info
         tick_spacing, current_tick, current_tick_lower, current_tick_upper = self.get_tick_info(row_data)
@@ -342,7 +353,7 @@ class MonthlyTrigger(Trigger):
         self._date_of_month: int = date_of_month
         super().__init__(do, **kwargs)
 
-    def when(self, row_data: RowData) -> bool:
+    def when(self, row_data: Snapshot) -> bool:
         ts = row_data.timestamp
         return ts.day == self._date_of_month and ts.hour == 0 and ts.minute == 0
 
@@ -354,6 +365,6 @@ class WeeklyTrigger(Trigger):
         self._day: int = day
         super().__init__(do, **kwargs)
 
-    def when(self, row_data: RowData) -> bool:
+    def when(self, row_data: Snapshot) -> bool:
         ts = row_data.timestamp
         return ts.weekday() == self._day and ts.hour == 0 and ts.minute == 0

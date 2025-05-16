@@ -13,7 +13,7 @@ from pandas import Series
 import demeter
 from demeter import (
     Strategy,
-    RowData,
+    Snapshot,
     Actuator,
     TokenInfo,
     MarketInfo,
@@ -72,6 +72,7 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
         self.short_info: ShortInfo = ShortInfo(_gp.init_short_amount)
         self.rescale_cnt: int = 0
         self.rebalance_cnt: int = 0
+        self.execute_after: int = 0
 
         # self.short_stop_loss_hit: bool = False
         # self.short_stop_loss_price: Decimal | None = None
@@ -183,7 +184,7 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
         tick_space = self.utils.params.tick_spacing
         return self.utils.ceiling_tick(lower, tick_space), self.utils.floor_tick(upper, tick_space)
 
-    def calculate_tick_bounds(self, row_data: RowData, is_first_lp: bool = False) -> tuple[int, int]:
+    def calculate_tick_bounds(self, row_data: Snapshot, is_first_lp: bool = False) -> tuple[int, int]:
         lp_row_data = self.utils.get_lp_row_data(row_data)
         spread_lower = self.utils.params.tick_spread_lower
         spread_upper = self.utils.params.tick_spread_upper
@@ -247,16 +248,23 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
         return new_stop_loss
 
 
-    def rescale_work(self, row_data: RowData):
+    def rescale_work(self, row_data: Snapshot):
 
         lp_market: UniLpMarket = self.broker.markets[self.utils.market_key]
 
         if len(lp_market.positions) == 0:
             return
 
+        # print(f"rescale_work position: {lp_market.positions}")
         # self.check_and_add_dca(row_data, lp_market)
 
-        current_price = row_data.prices[self.gp.base_token.name]
+        # current_price = row_data.prices[self.gp.base_token.name]
+        current_price = self.utils.get_current_price(row_data)
+        # lp_data = self.utils.get_lp_row_data(row_data)
+        # lp_data.closeTick
+        # print(f"current_price: {current_price}, m_price: {m_price}, price to tick: {lp_market.price_to_tick(m_price)}, openTick: {lp_data.openTick}, closeTick: {lp_data.closeTick}, "
+        #       f"lowestTick: {lp_data.lowestTick}, highestTick: {lp_data.highestTick}, price: {lp_data.price}, openPrice: {lp_data.open}, lowPrice: {lp_data.low}, highPrice: {lp_data.high}, closePrice: {lp_data.close}")
+
 
         self.check_stop_loss(current_price)
         try:
@@ -315,14 +323,17 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
                 # print(f"same tick, do not rescale: {new_tick_lower}, {new_tick_upper}")
                 return
 
+            _before_fee_lp_positions = lp_market.positions
             base_fee, quote_fee = lp_market.collect_fee(self.utils.current_position_info, collect_to_user=True)
             if self.gp.swap_fee:
                 pass
+
+            _lp_positions = lp_market.positions
             try:
                 base, quote = lp_market.remove_liquidity(self.utils.current_position_info, collect=True)
                 base_removed, quote_removed = base, quote
             except Exception as e:
-                print(f"failed to remove liquidity: {self.utils.current_position_info}")
+                print(f"failed to remove liquidity: {self.utils.current_position_info}, removed fee => base: {base_fee}, quote: {quote_fee}, positions: {_lp_positions}, before_fee_lp_positions: {_before_fee_lp_positions}")
                 raise e
 
             self.total_base_fee += base_fee
@@ -346,27 +357,32 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
                 if short_resolve_price is not None or quote == ZERO:  # need rebalance
                     self.rebalance_cnt += 1
                     if quote == ZERO:
+                        quote_based_changed = lp_change
                         lp_change = lp_change / current_price
                         base += lp_change
                         if lp_change > ZERO:
                             self.broker.add_to_balance(self.gp.base_token, lp_change)
+                            self.short_info.short_to_lp += quote_based_changed
                         else:
                             self.broker.subtract_from_balance(self.gp.base_token, lp_change * NEG_ONE)
+                            self.short_info.lp_to_short -= quote_based_changed
                     else:
                         quote += lp_change
                         if lp_change > ZERO:
                             self.broker.add_to_balance(self.gp.quote_token, lp_change)
+                            self.short_info.short_to_lp += lp_change
                         else:
                             self.broker.subtract_from_balance(self.gp.quote_token, lp_change * NEG_ONE)
+                            self.short_info.lp_to_short -= lp_change
 
                     self.short_info.short_amount += short_change
 
                 if self.params.compound:
                     self.utils.current_position_info, base_used, quote_used, _ = lp_market.add_liquidity_by_tick(
-                        new_tick_lower, new_tick_upper)
+                        new_tick_lower, new_tick_upper, tick=current_tick)
                 else:
                     self.utils.current_position_info, base_used, quote_used, _ = lp_market.add_liquidity_by_tick(
-                        new_tick_lower, new_tick_upper, base, quote)
+                        new_tick_lower, new_tick_upper, base, quote, tick=current_tick)
 
                 if self.short_info.short_price is None and quote == ZERO:  # need to open short
 
@@ -460,22 +476,46 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
             self.last_price = current_price
         pass
 
-    def first_lp(self, row_data: RowData):
+    # def after_bar(self, row: Snapshot):
+    #     if self.execute_after < 10:
+    #
+    #         lp_market: UniLpMarket = self.broker.markets[self.utils.market_key]
+    #
+    #         m_price = lp_market.market_status.data.price
+    #         current_price = row.prices[self.gp.base_token.name]
+    #
+    #         lp_data = self.utils.get_lp_row_data(row)
+    #         # lp_data.closeTick
+    #         print(
+    #             f"after_bar => current_price: {current_price}, m_price: {m_price}, price to tick: {lp_market.price_to_tick(m_price)}, openTick: {lp_data.openTick}, closeTick: {lp_data.closeTick}, "
+    #             f"lowestTick: {lp_data.lowestTick}, highestTick: {lp_data.highestTick}, price: {lp_data.price}, openPrice: {lp_data.open}, lowPrice: {lp_data.low}, highPrice: {lp_data.high}, closePrice: {lp_data.close}")
+    #
+    #         self.execute_after += 1
+    #
+    #     pass
+
+    def first_lp(self, row_data: Snapshot):
 
         lp_market: UniLpMarket = self.broker.markets[self.utils.market_key]
         # lp_row_data = row_data.market_status[self.utils.market_key]
 
+        print(f"init balance: {lp_market.get_market_balance()}, quote balance: {self.broker.get_token_balance(self.gp.quote_token)}, base balance: {self.broker.get_token_balance(self.gp.base_token)}")
+
         if len(lp_market.positions) > 0:
             raise RuntimeError("shouldn't have any position")
 
+        tick_spacing, current_tick, _, _ = self.utils.get_tick_info(row_data)
+
         if not self.params.initial_swap:
 
-            tick_spacing, current_tick, _, _ = self.utils.get_tick_info(row_data)
-
             if self.gp.token0 == self.gp.quote_token:
+            # if not self.gp.token0 == self.gp.quote_token:
+
                 current_tick_lower = current_tick + tick_spacing
+                # c_tick += tick_spacing
             else:
                 current_tick_lower = current_tick - tick_spacing
+                # c_tick -= tick_spacing
 
             lower, upper = self.utils.calculate_non_one_tick_spacing_rescale_tick_boundary(tick_spacing, current_tick,
                                                                                            current_tick_lower)
@@ -483,24 +523,27 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
 
             lp_market.even_rebalance()
             # need to know how to place initial position
-            match self.params.range_strategy:
-                case RangeStrategy.remix_dao:
-                    (lower, upper) = self.calculate_tick_bounds(row_data, True)
+            # match self.params.range_strategy:
+            #     case RangeStrategy.remix_dao:
+            lower, upper = self.calculate_tick_bounds(row_data, True)
 
-        self.utils.current_position_info, _, _, _ = lp_market.add_liquidity_by_tick(lower, upper)
-        # print(
-        #     f"\nadding first liquidity, price: {str(row_data.prices[_base_token.name])}, range: {str(lower)} ~ {str(upper)}, position_info: {str(self.utils.current_position_info)}")
+        self.utils.current_position_info, base_used, quote_used, liquid = lp_market.add_liquidity_by_tick(lower, upper, tick=current_tick)
+        print(
+            f"\nadding first liquidity, price: {str(self.utils.get_current_price(row_data))}, current: {current_tick}, range: {str(lower)} ~ {str(upper)}, "
+            f"base_used: {str(base_used)}, quote_used: {str(quote_used)}, liquid: {str(liquid)}, "
+            f"position_info: {str(self.utils.current_position_info)}")
 
         self.was_in_range = True
-        self.last_price = self.last_dca_price = self.last_check_price = row_data.prices[self.gp.base_token.name]
+        self.last_price = self.last_dca_price = self.last_check_price = self.utils.get_current_price(row_data) #row_data.prices[self.gp.base_token.name]
 
         pass
 
-    def calculate_final_result(self, row_data: RowData):
+    def calculate_final_result(self, row_data: Snapshot):
 
         lp_market: UniLpMarket = self.broker.markets[self.utils.market_key]
         _, current_tick, _, _ = self.utils.get_tick_info(row_data)
-        current_price = row_data.prices[self.gp.base_token.name]
+        # current_price = row_data.prices[self.gp.base_token.name]
+        current_price = self.utils.get_current_price(row_data)
         ed = ExportData()
         ed.time = row_data.timestamp
         ed.price = current_price
@@ -543,13 +586,26 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
 
         pass
 
-    def on_bar(self, row_data: RowData):
+    def on_bar(self, row_data: Snapshot):
+
+        # if self.execute_after < 10:
+        #
+        #     lp_market: UniLpMarket = self.broker.markets[self.utils.market_key]
+        #
+        #     m_price = lp_market.market_status.data.price
+        #     current_price = row_data.prices[self.gp.base_token.name]
+        #
+        #     lp_data = self.utils.get_lp_row_data(row_data)
+        #     # lp_data.closeTick
+        #     print(
+        #         f"on_bar => current_price: {current_price}, m_price: {m_price}, price to tick: {lp_market.price_to_tick(m_price)}, openTick: {lp_data.openTick}, closeTick: {lp_data.closeTick}, "
+        #         f"lowestTick: {lp_data.lowestTick}, highestTick: {lp_data.highestTick}, price: {lp_data.price}, openPrice: {lp_data.open}, lowPrice: {lp_data.low}, highPrice: {lp_data.high}, closePrice: {lp_data.close}")
 
         """
         Called after triggers on each iteration, at this time, market are not updated yet(Take uniswap market for example, fee of this minute are not added to positions).
 
         :param row_data: data in this iteration, include current timestamp, price, all columns data, and indicators(such as simple moving average)
-        :type row_data: RowData
+        :type row_data: Snapshot
         """
 
         if self.was_in_range or self.utils.current_position_info is None:
@@ -562,8 +618,8 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
             # check if the tick range ever overlaps the LP range
                 self.utils.current_position_info[0] <= lp_row_data.highestTick and
                 self.utils.current_position_info[1] >= lp_row_data.lowestTick)
-
-        self.check_stop_loss(row_data.prices[self.gp.base_token.name])
+        current_price = self.utils.get_current_price(row_data)
+        self.check_stop_loss(current_price)
         # if not self.short_stop_loss_hit and self.short_stop_loss_price is not None:
         #     current_price = row_data.prices[self.gp.base_token.name]
         #     self.short_stop_loss_hit = current_price >= self.short_stop_loss_price
@@ -573,20 +629,20 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
         if not self.short_info.short_stop_loss_hit and self.short_info.short_stop_loss_price is not None:
             self.short_info.short_stop_loss_hit = current_price >= self.short_info.short_stop_loss_price
 
-    def after_bar(self, row_data: RowData):
-        """
-        called after market are updated on each iteration
-
-        :param row_data: data in this iteration, include current timestamp, price, all columns data, and indicators(such as simple moving average)
-        :type row_data: RowData
-        """
-
-        # pos_info = self.utils.current_position_info
-        # if pos_info is not None:
-        #     tick_spread = pos_info[1] - pos_info[0]
-        #     self.tick_spreads.loc[len(self.tick_spreads)] = tick_spread
-
-        pass
+    # def after_bar(self, row_data: Snapshot):
+    #     """
+    #     called after market are updated on each iteration
+    #
+    #     :param row_data: data in this iteration, include current timestamp, price, all columns data, and indicators(such as simple moving average)
+    #     :type row_data: Snapshot
+    #     """
+    #
+    #     # pos_info = self.utils.current_position_info
+    #     # if pos_info is not None:
+    #     #     tick_spread = pos_info[1] - pos_info[0]
+    #     #     self.tick_spreads.loc[len(self.tick_spreads)] = tick_spread
+    #
+    #     pass
 
     def finalize(self):
         """
@@ -682,6 +738,9 @@ def run_test(bull_params: RemixDAOParams, bear_params: RemixDAOParams, params: T
         metrics["short_total_gl"] = strat.short_info.short_total_gain + strat.short_info.short_total_loss
         metrics["total_rebalance_cnt"] = Decimal(strat.rebalance_cnt)
         metrics["total_rescale_cnt"] = Decimal(strat.rescale_cnt)
+        metrics["gmx_to_lp"] = strat.short_info.short_to_lp
+        metrics["lp_to_gmx"] = strat.short_info.lp_to_short
+        metrics["net_gmx_to_lp"] = strat.short_info.short_to_lp - strat.short_info.lp_to_short
 
         return metrics
     except Exception as e:
@@ -700,7 +759,7 @@ class RescaleParam:
 
     def initial_swap(self) -> bool:
         isw = self.init_tick_spread != 0
-        print(f"initial swap: {isw}")
+        # print(f"initial swap: {isw}")
         return isw
 
 
@@ -740,7 +799,7 @@ def process_for_date(csd: datetime, dsd: date, ded: date, id: str, flip_param_da
     _tick_spacing = int(fee * 200)  # 10  # should simply be fee * 200
     _aggressive = True
     _compound = False
-    _folder_prefix = f"new-5m-short-{_short_stop_loss_ratio}sl-{id}-{quote_token.name.lower()}" #
+    _folder_prefix = f"new-5m-short-{_short_stop_loss_ratio}sl-open-{quote_token.name.lower()}" #
     _dca_add_if_non_empty = False
     _dca_timing = DcaTiming.none
     _dca_addon_price_percent = ZERO  # Decimal(0.5)
@@ -814,7 +873,7 @@ def process_for_date(csd: datetime, dsd: date, ded: date, id: str, flip_param_da
     # dsd = _data_start_date
     # ded = _data_end_date
 
-    folder = f"result/{_folder_prefix}-{init_quote}-{csd.strftime("%Y%m%d")}-{ded.strftime("%Y%m%d")}"
+    folder = f"result/{_folder_prefix}-{init_quote}-{csd.strftime("%Y%m%d")}-{ded.strftime("%Y%m%d")}{_cmp}"
     Path(folder).mkdir(parents=True, exist_ok=True)
     parameters: List[Tuple[RemixDAOParams, RemixDAOParams, TestParams]] = []
 

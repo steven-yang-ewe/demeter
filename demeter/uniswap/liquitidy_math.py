@@ -135,12 +135,15 @@ def get_liquidity(
     sqrtA = get_sqrt_ratio_at_tick(tickA)
     sqrtB = get_sqrt_ratio_at_tick(tickB)
 
+    # print(f"sqrt: {sqrt}, sqrtA: {sqrtA}, sqrtB: {sqrtB}")
+
     if sqrtA > sqrtB:
         (sqrtA, sqrtB) = (sqrtB, sqrtA)
     amount0wei: int = to_wei(amount0, decimal0)
     amount1wei: int = to_wei(amount1, decimal1)
     if sqrt <= sqrtA:
         liquidity0 = get_liquidity_for_amount0(sqrtA, sqrtB, amount0wei)
+        # print(f"liquidity0: {liquidity0}")
         return liquidity0
     elif sqrtB > sqrt > sqrtA:
         liquidity0 = get_liquidity_for_amount0(sqrt, sqrtB, amount0wei)

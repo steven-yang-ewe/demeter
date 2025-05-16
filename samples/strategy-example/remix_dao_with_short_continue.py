@@ -13,7 +13,7 @@ from pandas import Series
 import demeter
 from demeter import (
     Strategy,
-    RowData,
+    Snapshot,
     Actuator,
     TokenInfo,
     MarketInfo,
@@ -177,7 +177,7 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
         tick_space = self.utils.params.tick_spacing
         return self.utils.ceiling_tick(lower, tick_space), self.utils.floor_tick(upper, tick_space)
 
-    def calculate_tick_bounds(self, row_data: RowData, is_first_lp: bool = False) -> tuple[int, int]:
+    def calculate_tick_bounds(self, row_data: Snapshot, is_first_lp: bool = False) -> tuple[int, int]:
         lp_row_data = self.utils.get_lp_row_data(row_data)
         spread_lower = self.utils.params.tick_spread_lower
         spread_upper = self.utils.params.tick_spread_upper
@@ -234,7 +234,7 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
         avg = (lp_balance + short_balance) / 2
         return avg - lp_balance, avg - short_balance
 
-    def rescale_work(self, row_data: RowData):
+    def rescale_work(self, row_data: Snapshot):
 
         lp_market: UniLpMarket = self.broker.markets[self.utils.market_key]
 
@@ -440,7 +440,7 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
             self.last_price = current_price
         pass
 
-    def first_lp(self, row_data: RowData):
+    def first_lp(self, row_data: Snapshot):
 
         lp_market: UniLpMarket = self.broker.markets[self.utils.market_key]
         # lp_row_data = row_data.market_status[self.utils.market_key]
@@ -476,7 +476,7 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
 
         pass
 
-    def calculate_final_result(self, row_data: RowData):
+    def calculate_final_result(self, row_data: Snapshot):
 
         lp_market: UniLpMarket = self.broker.markets[self.utils.market_key]
         _, current_tick, _, _ = self.utils.get_tick_info(row_data)
@@ -523,12 +523,12 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
 
         pass
 
-    def on_bar(self, row_data: RowData):
+    def on_bar(self, row_data: Snapshot):
         """
         Called after triggers on each iteration, at this time, market are not updated yet(Take uniswap market for example, fee of this minute are not added to positions).
 
         :param row_data: data in this iteration, include current timestamp, price, all columns data, and indicators(such as simple moving average)
-        :type row_data: RowData
+        :type row_data: Snapshot
         """
 
         if self.was_in_range or self.utils.current_position_info is None:
@@ -552,12 +552,12 @@ class RemixDaoDcaWeekStratStrategy(Strategy):
         if not self.short_info.short_stop_loss_hit and self.short_info.short_stop_loss_price is not None:
             self.short_info.short_stop_loss_hit = current_price >= self.short_info.short_stop_loss_price
 
-    def after_bar(self, row_data: RowData):
+    def after_bar(self, row_data: Snapshot):
         """
         called after market are updated on each iteration
 
         :param row_data: data in this iteration, include current timestamp, price, all columns data, and indicators(such as simple moving average)
-        :type row_data: RowData
+        :type row_data: Snapshot
         """
 
         # pos_info = self.utils.current_position_info

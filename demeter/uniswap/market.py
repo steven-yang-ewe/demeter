@@ -493,6 +493,8 @@ class UniLpMarket(Market):
                 self._pool.token1.decimal,
                 self._is_token0_quote,
             )
+
+        # print(f"sqrt_price_x96: {sqrt_price_x96}, market_status.data.price: {self.market_status.data.price}, _pool.token0.decimal: {self._pool.token0.decimal}, _pool.token1.decimal: {self._pool.token1.decimal}, self._is_token0_quote: {self._is_token0_quote}")
         if lower_tick > upper_tick:
             raise DemeterError("lower tick should be less than upper tick")
 
@@ -690,6 +692,7 @@ class UniLpMarket(Market):
             self.broker.get_token_balance(self.quote_token) if quote_max_amount is None else quote_max_amount
         )
 
+
         token0_amt, token1_amt = self._convert_pair(base_max_amount, quote_max_amount)
         (
             created_position,
@@ -697,6 +700,7 @@ class UniLpMarket(Market):
             token1_used,
             liquidity,
         ) = self._add_liquidity_by_tick(token0_amt, token1_amt, lower_tick, upper_tick, sqrt_price_x96)
+        # print(f"token0_amt: {token0_amt}, token1_amt: {token1_amt}, token0_used: {token0_used}, token1_used: {token1_used}, lower_tick: {lower_tick}, upper_tick: {upper_tick}")
         base_used, quote_used = self._convert_pair(token0_used, token1_used)
         self._record_action(
             AddLiquidityAction(

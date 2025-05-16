@@ -196,7 +196,8 @@ def export_apr_results_with_short(file_path: str, metrics: List[Tuple[str, Dict[
              "Short Stop Loss Count", "Short Total Loss",
              "Short Win Count", "Short Total Gain",
              "Short Consecutive Loss Count", "Short Actual Gain/Loss",
-             "Rescale Count", "Rebalance Count"])
+             "Rescale Count", "Rebalance Count",
+             "GMX to LP", "LP to GMX", "Net GMX to LP"])
 
 
         for (strategy, m) in metrics:
@@ -223,7 +224,8 @@ def export_apr_results_with_short(file_path: str, metrics: List[Tuple[str, Dict[
                  to_str(m.get("short_stop_loss_cnt")), to_str(m.get("short_total_loss_amount")),
                  to_str(m.get("short_total_win_cnt")), to_str(m.get("short_total_gain_amount")),
                  to_str(m.get("short_consecutive_loss_cnt")), to_str(m.get("short_total_gl")),
-                 to_str(m.get("total_rescale_cnt")), to_str(m.get("total_rebalance_cnt")),])
+                 to_str(m.get("total_rescale_cnt")), to_str(m.get("total_rebalance_cnt")),
+                 to_str(m.get("gmx_to_lp")), to_str(m.get("lp_to_gmx")),to_str(m.get("net_gmx_to_lp")), ])
 
     pass
 

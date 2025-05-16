@@ -36,6 +36,8 @@ class V3CoreLib(object):
             pool.token0.decimal,
             pool.token1.decimal,
         )
+
+        # print(f"position liquidity: {position_liq}, lower tick: {lower_tick}, upper tick: {upper_tick}, token0_amount: {token0_amount}, token1_amount: {token1_amount}, pool.token0.decimal: {pool.token0.decimal}, pool.token1.decimal: {pool.token1.decimal}")
         token0_in_position, token1_in_position = get_amounts(
             sqrt_price_x96,
             lower_tick,
@@ -44,6 +46,8 @@ class V3CoreLib(object):
             pool.token0.decimal,
             pool.token1.decimal,
         )
+
+        # print(f"token0_in_position: {token0_in_position}, token1_in_position: {token1_in_position}")
         new_position_entity = PositionInfo(lower_tick=lower_tick, upper_tick=upper_tick)
         return (
             token0_in_position,
